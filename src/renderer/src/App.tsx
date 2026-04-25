@@ -211,6 +211,32 @@ const browserFallbackApi: Window['javiProxy'] = {
   },
   async newWindow() {
     return false
+  },
+  async getUpdateState() {
+    return {
+      stage: 'unsupported' as const,
+      currentVersion: '0.0.0',
+      autoUpdatesEnabled: false,
+      mode: 'unsupported' as const,
+      latestVersion: null,
+      downloadedVersion: null,
+      progressPercent: null,
+      lastCheckedAt: null,
+      releaseName: null,
+      releaseDate: null,
+      releaseNotes: null,
+      downloadUrl: null,
+      error: 'Actualizaciones no disponibles en modo navegador'
+    }
+  },
+  async checkForUpdates() {
+    return this.getUpdateState()
+  },
+  async downloadUpdate() {
+    return this.getUpdateState()
+  },
+  onAppUpdateState() {
+    return undefined
   }
 }
 
@@ -244,6 +270,7 @@ export default function App() {
   const [vscodeOpening, setVscodeOpening] = useState(false)
   const [testResult, setTestResult] = useState('')
   const [toasts, setToasts] = useState<Toast[]>([])
+  const [appUpdateState, setAppUpdateState] = useState<AppUpdateState | null>(null)
 
   const modelOptions = useMemo(() => {
     return Array.from(new Set([...RECOMMENDED_MODELS, ...models])).sort()
@@ -282,6 +309,14 @@ export default function App() {
     void refreshModels()
     const id = window.setInterval(() => void refresh(), 5000)
     return () => window.clearInterval(id)
+  }, [])
+
+  useEffect(() => {
+    const api = javiProxyApi()
+    if (!api.getUpdateState) return
+    void api.getUpdateState().then(setAppUpdateState).catch(() => {})
+    const unsub = api.onAppUpdateState?.((state) => setAppUpdateState(state))
+    return () => { unsub?.() }
   }, [])
 
   const saveConfig = async () => {
@@ -415,8 +450,46 @@ export default function App() {
 
   return (
     <div className="app">
+      {appUpdateState?.stage === 'available' && (
+        <div className="update-banner">
+          <span>Nueva version {appUpdateState.latestVersion} disponible</span>
+          <button className="btn btn-primary" style={{ padding: '2px 12px', fontSize: 12 }} onClick={() => window.appUpdate?.download().then(setAppUpdateState).catch(() => {})}>
+            Descargar
+          </button>
+          <button className="btn btn-default" style={{ padding: '2px 8px', fontSize: 12 }} onClick={() => setAppUpdateState(null)}>
+            ✕
+          </button>
+        </div>
+      )}
+
       <div className="titlebar">
         <div className="titlebar-title">JaviProxy</div>
+        <div className="titlebar-update-area">
+          {appUpdateState && appUpdateState.stage !== 'unsupported' && (
+            <>
+              <span className="titlebar-app-version">v{appUpdateState.currentVersion}</span>
+              {appUpdateState.stage === 'available' ? (
+                <button
+                  className="titlebar-update-chip titlebar-update-chip-new"
+                  onClick={() => window.javiProxy?.downloadUpdate().then(setAppUpdateState).catch(() => {})}
+                  title={`v${appUpdateState.latestVersion} disponible — clic para descargar`}
+                >
+                  🆕
+                </button>
+              ) : appUpdateState.stage === 'checking' ? (
+                <span className="spinner" style={{ width: 10, height: 10, flexShrink: 0 }} />
+              ) : (
+                <button
+                  className="titlebar-update-chip"
+                  onClick={() => window.javiProxy?.checkForUpdates().then(setAppUpdateState).catch(() => {})}
+                  title={appUpdateState.stage === 'error' ? `Error: ${appUpdateState.error}` : 'Buscar actualizaciones'}
+                >
+                  {appUpdateState.stage === 'error' ? '⚠️' : '↑'}
+                </button>
+              )}
+            </>
+          )}
+        </div>
         <div className={`titlebar-status ${isReady ? 'status-ok' : 'status-warn'}`}>
           {isReady ? 'Activo' : 'Pendiente'}
         </div>

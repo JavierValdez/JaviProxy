@@ -23,7 +23,7 @@ jobs:
         platform:
           - name: macOS
             os: macos-latest
-            args: --mac dmg
+            args: --mac dmg zip
           - name: Windows
             os: windows-latest
             args: --win nsis --x64

@@ -1,0 +1,22 @@
+══════════════════════════════════════════
+  JaviProxy — Instrucciones de instalacion
+══════════════════════════════════════════
+
+Si macOS dice "JaviProxy esta danado y no puede abrirse",
+debes ejecutar este comando en la Terminal:
+
+  xattr -cr /Applications/JaviProxy.app
+
+Como hacerlo paso a paso:
+
+  1. Arrastra JaviProxy a la carpeta Aplicaciones (como siempre)
+  2. Abre la app Terminal
+       Finder -> Aplicaciones -> Utilidades -> Terminal
+  3. Copia y pega este comando exactamente:
+       xattr -cr /Applications/JaviProxy.app
+  4. Presiona Enter
+  5. Abre JaviProxy normalmente
+
+Solo necesitas hacerlo una vez tras cada instalacion.
+
+══════════════════════════════════════════

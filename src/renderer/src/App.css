@@ -76,6 +76,73 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .status-ok { color: #7ee787; background: rgba(26,127,55,0.16); }
 .status-warn { color: #f2cc60; background: rgba(154,103,0,0.16); }
 
+.update-banner {
+  background: #1a7f37;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  font-size: 13px;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+.update-banner span { flex: 1; }
+
+.titlebar-update-area {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  -webkit-app-region: no-drag;
+  animation: fadeSlideUp 0.5s ease 0.3s both;
+}
+
+.titlebar-app-version {
+  font-size: 10px;
+  color: #5a6570;
+  font-family: 'SF Mono', Menlo, monospace;
+}
+
+.titlebar-update-chip {
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 5px;
+  color: rgba(255,255,255,0.4);
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.titlebar-update-chip:hover {
+  background: rgba(255,255,255,0.14);
+  color: rgba(255,255,255,0.8);
+}
+
+.titlebar-update-chip-new {
+  background: rgba(96,165,250,0.18);
+  border-color: rgba(96,165,250,0.4);
+  color: #93c5fd;
+  animation: pulse 2s infinite;
+}
+
+.titlebar-update-chip-new:hover {
+  background: rgba(96,165,250,0.3);
+  color: #bfdbfe;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .app-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
 
 .sidebar {

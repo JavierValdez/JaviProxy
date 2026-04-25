@@ -44,6 +44,22 @@ interface JaviProxyModelsResult {
   raw: unknown
 }
 
+interface AppUpdateState {
+  stage: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error' | 'unsupported'
+  currentVersion: string
+  autoUpdatesEnabled: boolean
+  mode: 'manual' | 'unsupported'
+  latestVersion: string | null
+  downloadedVersion: string | null
+  progressPercent: number | null
+  lastCheckedAt: string | null
+  releaseName: string | null
+  releaseDate: string | null
+  releaseNotes: string | null
+  downloadUrl: string | null
+  error: string | null
+}
+
 interface Window {
   javiProxy?: {
     getConfig: () => Promise<JaviProxyConfig>
@@ -60,5 +76,15 @@ interface Window {
     applyVSCodeWorkspaceSettings: () => Promise<{ ok: boolean; path?: string; canceled?: boolean }>
     openVSCodeClaudePanel: (insiders?: boolean) => Promise<{ ok: boolean; url: string }>
     newWindow: () => Promise<boolean>
+    getUpdateState: () => Promise<AppUpdateState>
+    checkForUpdates: () => Promise<AppUpdateState>
+    downloadUpdate: () => Promise<AppUpdateState>
+    onAppUpdateState: (cb: (state: AppUpdateState) => void) => (() => void) | undefined
+  }
+  appUpdate?: {
+    getState: () => Promise<AppUpdateState>
+    check: () => Promise<AppUpdateState>
+    download: () => Promise<AppUpdateState>
+    onState: (cb: (state: AppUpdateState) => void) => (() => void) | undefined
   }
 }

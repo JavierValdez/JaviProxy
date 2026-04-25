@@ -40,19 +40,50 @@
     "appId": "com.javiproxy.app",
     "productName": "JaviProxy",
     "mac": {
-      "target": "dmg"
+      "target": "dmg",
+      "icon": "resources/icon.icns"
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "resources/icon.ico"
     },
     "nsis": {
       "oneClick": true,
       "perMachine": false,
       "allowElevation": false,
       "allowToChangeInstallationDirectory": false,
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220,
+          "type": "file"
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 130,
+          "y": 360,
+          "type": "file",
+          "path": "resources/LEER_ANTES_DE_ABRIR.txt"
+        }
+      ]
+    },
+    "extraResources": [
+      {
+        "from": "resources/LEER_ANTES_DE_ABRIR.txt",
+        "to": "LEER_ANTES_DE_ABRIR.txt"
+      }
+    ],
     "directories": {
       "output": "dist"
     },

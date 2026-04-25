@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { startProxyServer, fetchModels, testUpstream, effectiveModel } from './proxy'
 import type { ProxyConfig, ProxyServerHandle } from './proxy'
+import { setupAppUpdater } from './updater'
 
 const isDev = process.env.NODE_ENV === 'development'
 const DEFAULT_PORT = Number(process.env.PORT || 8787)
@@ -227,6 +228,7 @@ function createWindow(sourceWindow?: BrowserWindow | null): BrowserWindow {
   window.on('ready-to-show', () => {
     if (shouldMaximize) window.maximize()
     window.show()
+    setupAppUpdater(window)
   })
 
   window.webContents.setWindowOpenHandler((details) => {
