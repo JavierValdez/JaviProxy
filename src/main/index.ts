@@ -1,4 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from 'electron'
+app.name = 'JaviProxy'
+
 import type { IpcMainInvokeEvent, MenuItemConstructorOptions, OpenDialogOptions } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -12,8 +14,6 @@ const DEFAULT_PORT = Number(process.env.PORT || 8787)
 const DEFAULT_HOST = process.env.HOST || '127.0.0.1'
 const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
 const LEGACY_ZEN_BASE_URL = 'https://opencode.ai/zen/v1'
-
-app.name = 'JaviProxy'
 
 interface StoredConfig {
   upstreamBase?: string
@@ -203,6 +203,15 @@ function createWindow(sourceWindow?: BrowserWindow | null): BrowserWindow {
   ]
   const preloadPath = preloadCandidates.find((p) => existsSync(p)) || preloadCandidates[0]
 
+  const windowsIconCandidates = [
+    join(app.getAppPath(), 'resources', 'icon.ico'),
+    join(process.resourcesPath, 'icon.ico'),
+    join(__dirname, '../../resources/icon.ico')
+  ]
+  const windowsIconPath = process.platform === 'win32'
+    ? windowsIconCandidates.find((p) => existsSync(p))
+    : undefined
+
   const window = new BrowserWindow({
     width: 1180,
     height: 760,
@@ -212,6 +221,7 @@ function createWindow(sourceWindow?: BrowserWindow | null): BrowserWindow {
     title: 'JaviProxy',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     backgroundColor: '#ffffff',
+    ...(windowsIconPath ? { icon: windowsIconPath } : {}),
     webPreferences: {
       preload: preloadPath,
       sandbox: false
@@ -410,6 +420,12 @@ function psQuote(value: string): string {
 
 app.whenReady().then(async () => {
   if (process.platform === 'win32') app.setAppUserModelId('com.javiproxy.app')
+
+  if (isDev && process.platform === 'darwin' && app.dock) {
+    const iconPath = join(app.getAppPath(), 'ico.png')
+    if (existsSync(iconPath)) app.dock.setIcon(iconPath)
+  }
+
   setupApplicationMenu()
   await ensureProxyStarted()
   createWindow()

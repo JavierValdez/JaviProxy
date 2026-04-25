@@ -16,7 +16,7 @@ import {
   ShieldCheck,
   Terminal
 } from 'lucide-react'
-import appIcon from './assets/javiproxy.svg'
+import appIcon from './assets/icon.png'
 
 interface Toast {
   id: number
