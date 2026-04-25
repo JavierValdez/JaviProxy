@@ -1,6 +1,6 @@
 {
   "name": "javiproxy",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "description": "JaviProxy - OpenCode Go router for Claude Code",
   "private": true,
   "type": "module",
