@@ -55,6 +55,59 @@ The codebase has two independent proxy implementations:
 
 `electron.vite.config.ts` configures three Vite builds (main, preload, renderer). The renderer uses `@vitejs/plugin-react`. A custom `fixCjsShimPlugin` patches the CJS module shim import during bundling.
 
+## Release / Deployment Workflow
+
+This project uses GitHub Actions to build and publish installers automatically. Follow these steps exactly when creating a new release.
+
+### Prerequisites
+
+- The GitHub Actions workflow is at `.github/workflows/release.yml`.
+- It triggers **only on git tags** matching `v*` (e.g., `v0.1.3`).
+- `electron-builder` uses the `version` field in `package.json` to name the output files (DMG, EXE, ZIP) and to identify the GitHub Release to publish into.
+- If the `package.json` version and the git tag do not match, `electron-builder` may overwrite files in the wrong release.
+
+### Step-by-step release checklist
+
+1. **Update `package.json` version** to match the desired release tag:
+   ```json
+   {
+     "version": "0.1.4"
+   }
+   ```
+
+2. **Commit the version bump** on `main`:
+   ```bash
+   git add package.json
+   git commit -m "chore: bump version to 0.1.4"
+   git push origin main
+   ```
+
+3. **Create and push the git tag**. The tag must match the `package.json` version with a `v` prefix:
+   ```bash
+   git tag v0.1.4
+   git push origin v0.1.4
+   ```
+
+4. **Wait for GitHub Actions** to finish. Two jobs run in parallel:
+   - `Publish macOS` — builds `JaviProxy-<version>-arm64.dmg` and `JaviProxy-<version>-arm64-mac.zip`
+   - `Publish Windows` — builds `JaviProxy-Setup-<version>.exe`
+
+5. **Verify the release** at:
+   https://github.com/JavierValdez/JaviProxy/releases
+
+### Common mistakes to avoid
+
+- **NEVER create a tag before bumping `package.json`**. If you do, `electron-builder` will publish files named with the old version, overwriting the previous release.
+- **Do not reuse tags**. Tags are immutable in Git. If a build fails, bump the version and create a new tag.
+- **Icons must exist**. The build will fail if `resources/icon.icns` (macOS) or `resources/icon.ico` (Windows) are missing.
+
+### Build targets configured
+
+| Platform | Output |
+|----------|--------|
+| macOS    | `.dmg` (installer), `.zip` (portable) |
+| Windows  | `.exe` (NSIS one-click installer) |
+
 ## Important Notes
 
 - The local proxy endpoint is `http://127.0.0.1:8787/v1/messages`
