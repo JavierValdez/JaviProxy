@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img" aria-label="JaviProxy">
+  <rect width="96" height="96" rx="18" fill="#24292f"/>
+  <path d="M25 29h24c11 0 19 7 19 18s-8 18-19 18H37v12H25V29zm12 11v14h11c5 0 8-3 8-7s-3-7-8-7H37z" fill="#ffffff"/>
+  <path d="M22 75h49v7H22z" fill="#2da44e"/>
+  <circle cx="72" cy="24" r="8" fill="#0969da"/>
+</svg>

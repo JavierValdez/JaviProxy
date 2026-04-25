@@ -1,0 +1,28 @@
+import { contextBridge, ipcRenderer } from 'electron'
+
+const javiProxyAPI = {
+  getConfig: () => ipcRenderer.invoke('config:get'),
+  setConfig: (config: any) => ipcRenderer.invoke('config:set', config),
+  getStatus: () => ipcRenderer.invoke('proxy:status'),
+  startProxy: () => ipcRenderer.invoke('proxy:start'),
+  stopProxy: () => ipcRenderer.invoke('proxy:stop'),
+  listModels: () => ipcRenderer.invoke('proxy:models'),
+  testProxy: () => ipcRenderer.invoke('proxy:test'),
+  openPath: (targetPath: string) => ipcRenderer.invoke('app:openPath', targetPath),
+  launchClaude: () => ipcRenderer.invoke('claude:launch'),
+  getCommands: () => ipcRenderer.invoke('claude:commands'),
+  getVSCodeSettingsPayload: () => ipcRenderer.invoke('vscode:settingsPayload'),
+  applyVSCodeWorkspaceSettings: () => ipcRenderer.invoke('vscode:applyWorkspaceSettings'),
+  openVSCodeClaudePanel: (insiders?: boolean) => ipcRenderer.invoke('vscode:openClaudePanel', insiders),
+  newWindow: () => ipcRenderer.invoke('app:newWindow')
+}
+
+if (process.contextIsolated) {
+  try {
+    contextBridge.exposeInMainWorld('javiProxy', javiProxyAPI)
+  } catch (error) {
+    console.error(error)
+  }
+} else {
+  ;(globalThis as any).javiProxy = javiProxyAPI
+}

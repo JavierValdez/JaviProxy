@@ -1,0 +1,37 @@
+{
+  "claudeCode.environmentVariables": [
+    {
+      "name": "ANTHROPIC_BASE_URL",
+      "value": "http://127.0.0.1:8787"
+    },
+    {
+      "name": "ANTHROPIC_AUTH_TOKEN",
+      "value": "javiproxy-local"
+    },
+    {
+      "name": "ANTHROPIC_CUSTOM_MODEL_OPTION",
+      "value": "claude-sonnet-4-6"
+    },
+    {
+      "name": "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
+      "value": "JaviProxy"
+    },
+    {
+      "name": "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION",
+      "value": "OpenCode Go through JaviProxy"
+    },
+    {
+      "name": "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+      "value": "1"
+    },
+    {
+      "name": "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+      "value": "1"
+    },
+    {
+      "name": "ENABLE_TOOL_SEARCH",
+      "value": "false"
+    }
+  ],
+  "claudeCode.disableLoginPrompt": true
+}
