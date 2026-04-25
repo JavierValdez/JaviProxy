@@ -480,11 +480,11 @@ export default function App() {
                 <span className="spinner" style={{ width: 10, height: 10, flexShrink: 0 }} />
               ) : (
                 <button
-                  className="titlebar-update-chip"
+                  className="titlebar-update-btn"
                   onClick={() => window.javiProxy?.checkForUpdates().then(setAppUpdateState).catch(() => {})}
                   title={appUpdateState.stage === 'error' ? `Error: ${appUpdateState.error}` : 'Buscar actualizaciones'}
                 >
-                  {appUpdateState.stage === 'error' ? '⚠️' : '↑'}
+                  {appUpdateState.stage === 'error' ? '⚠️ Error' : 'Buscar actualizaciones'}
                 </button>
               )}
             </>
