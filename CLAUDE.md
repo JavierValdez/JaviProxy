@@ -35,15 +35,11 @@ The HTTP proxy lives in `src/main/proxy.ts`. It is an `http.createServer` that:
 
 Key translation details:
 - `tool_use` / `tool_result` blocks are converted to/from OpenAI `tool_calls`
-- `tool_choice` is converted to a system prompt instruction (Kimi rejects the direct `tool_choice` field)
+- `tool_choice` is converted to a system prompt instruction (Kimi rejects the direct `tool_choice` field), and `parallel_tool_calls` is extracted from `disable_parallel_tool_use` when present
 - The proxy injects a system prompt (`TOOL_BRIDGE_SYSTEM_PROMPT`) guiding the model to use native OpenAI tool_calls
 - `parseTextAndToolUses` handles models that emit tools as XML tags (`<tool_use>`, `<invoke>`), JSON, plain text lines, or HTML-escaped variants
-
-### Dual Proxy Modes
-
-The codebase has two independent proxy implementations:
-1. **Electron-integrated** (`src/main/proxy.ts`) — Started by the main process, config managed via IPC and stored encrypted in Electron's user data directory.
-2. **Standalone** (`src/opencode-go-proxy.mjs`) — A self-contained Node.js server that can run without Electron. Used by the dev renderer view at `http://localhost:5173` (which can read proxy state but cannot modify config since it lacks the preload bridge).
+- **Streaming**: Native upstream SSE is used by default for speed. Synthetic streaming is only forced for upstream models known to emit tool calls as plain text (currently `deepseek-*` and `qwen-*`), so the proxy can parse and split fused tool calls correctly after the full response arrives. All other models (e.g. `kimi-k2.6`) stream tool_calls in real time.
+- **Multi-model compatibility**: The proxy detects and parses tool calls that models intermittently emit as plain text inside the `content` field (e.g. `functionName{"key": "value"}`) and splits them into proper `tool_use` blocks, preserving any surrounding prose. This fixes compatibility with DeepSeek-V4 and similar models.
 
 ### TypeScript Configuration
 

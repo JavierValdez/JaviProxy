@@ -95,7 +95,10 @@ const TOOL_BRIDGE_SYSTEM_PROMPT = [
   'Use the native OpenAI tool_calls/function-calling channel whenever you need a tool.',
   'When tools are available and the next step requires file inspection, editing, or commands, call the tool immediately instead of narrating intent.',
   'Do not write <tool_use>, <tool_result>, JSON tool envelopes, or bare tool names as normal assistant text.',
-  'Historical <tool_use> and <tool_result> tags in the transcript are summaries of already executed tools; do not copy that format.'
+  'Historical <tool_use> and <tool_result> tags in the transcript are summaries of already executed tools; do not copy that format.',
+  'CRITICAL: When you decide to use a tool, you MUST emit it through the tool_calls channel. Never write the tool name followed by JSON arguments inside the regular text content.',
+  'Example of what NOT to do:  Bash{"command": "ls"}  or  Read{"file_path": "x"}',
+  'Instead, use the formal tool_calls mechanism provided by the API.'
 ].join('\n')
 
 const TOOL_CALL_REASONING_REPLAY = 'Bridge replay: original reasoning unavailable.'
@@ -443,7 +446,13 @@ function toOpenAIChatCompletion(config: ProxyConfig, body: any, stream: boolean)
   if (Array.isArray(body.stop_sequences) && body.stop_sequences.length) request.stop = body.stop_sequences
 
   const tools = convertTools(body.tools)
-  if (tools.length) request.tools = tools
+  if (tools.length) {
+    request.tools = tools
+    const parallelToolCalls = extractParallelToolCalls(body.tool_choice)
+    if (typeof parallelToolCalls === 'boolean') {
+      request.parallel_tool_calls = parallelToolCalls
+    }
+  }
 
   return request
 }
@@ -482,7 +491,7 @@ function convertAnthropicMessage(message: any): any[] {
 
     return [{
       role: 'assistant',
-      content: text || null,
+      content: text || (toolCalls.length ? '' : null),
       ...(toolCalls.length ? { reasoning_content: TOOL_CALL_REASONING_REPLAY } : {}),
       ...(toolCalls.length ? { tool_calls: toolCalls } : {})
     }]
@@ -528,6 +537,33 @@ function toolChoiceToInstruction(choice: any): string | undefined {
   if (choice.type === 'tool' && choice.name) {
     return `For this turn, you must call the ${choice.name} tool using the native tool_calls/function-calling channel.`
   }
+  return undefined
+}
+
+/**
+ * Extract OpenAI's `parallel_tool_calls` flag from Anthropic's `tool_choice`.
+ *
+ * Anthropic uses `disable_parallel_tool_use` (inverse logic) inside
+ * `tool_choice`. OpenAI uses `parallel_tool_calls` at the request level.
+ *
+ * Mappings:
+ *   disable_parallel_tool_use: true  -> parallel_tool_calls: false
+ *   disable_parallel_tool_use: false -> parallel_tool_calls: true
+ *   type: "any"                       -> parallel_tool_calls: true
+ *   type: "tool"                      -> parallel_tool_calls: false
+ *   type: "auto" | "none"             -> undefined (leave to upstream default)
+ */
+function extractParallelToolCalls(toolChoice: any): boolean | undefined {
+  if (!toolChoice || typeof toolChoice !== 'object') return undefined
+
+  // Explicit disable_parallel_tool_use takes precedence
+  if (toolChoice.disable_parallel_tool_use === true) return false
+  if (toolChoice.disable_parallel_tool_use === false) return true
+
+  // Fallback to type heuristics when the flag is absent
+  if (toolChoice.type === 'any') return true
+  if (toolChoice.type === 'tool') return false
+
   return undefined
 }
 
@@ -581,7 +617,7 @@ async function sendAnthropicStream(
   original: any,
   logContext: ProxyLogContext
 ): Promise<void> {
-  if (shouldUseSyntheticStream(original)) {
+  if (shouldUseSyntheticStream(original, config)) {
     logContext.log('stream_strategy', { mode: 'synthetic_tool_turn' })
     const json = await createMessage(config, original, logContext)
     const anthropic = toAnthropicMessage(json, original)
@@ -1101,6 +1137,26 @@ function appendTextOrToolBlocks(blocks: any[], value: string, knownTools: KnownT
     return parsed.length
   }
 
+  // Try fused text+tool format first (DeepSeek-V4 etc.) because it preserves surrounding prose
+  const split = splitTextAndFusedTools(cleaned, knownTools)
+  if (split.length > 1 || (split.length === 1 && split[0].type === 'tool_use')) {
+    let offset = 0
+    for (const part of split) {
+      if (part.type === 'tool_use') {
+        blocks.push({
+          type: 'tool_use',
+          id: `toolu_${part.name}_${startIndex + offset}`,
+          name: part.name,
+          input: part.input
+        })
+        offset += 1
+      } else if (part.text.trim()) {
+        blocks.push({ type: 'text', text: part.text.trimEnd() })
+      }
+    }
+    return offset
+  }
+
   const plain = parsePlainToolLines(cleaned, knownTools)
   if (plain.length) {
     plain.forEach((tool, offset) => {
@@ -1130,6 +1186,43 @@ function appendTextOrToolBlocks(blocks: any[], value: string, knownTools: KnownT
 
   blocks.push({ type: 'text', text: cleaned })
   return 0
+}
+
+/**
+ * Split text that contains fused tool calls (e.g. DeepSeek-V4 output) into
+ * an ordered list of text and tool_use segments.
+ */
+function splitTextAndFusedTools(text: string, knownTools: KnownTool[]): Array<{ type: 'text'; text: string } | { type: 'tool_use'; name: string; input: Record<string, unknown> }> {
+  const parts: Array<{ type: 'text'; text: string } | { type: 'tool_use'; name: string; input: Record<string, unknown> }> = []
+  const toolNames = knownTools.map((t) => t.name).sort((a, b) => b.length - a.length)
+  const escaped = toolNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  if (!escaped.length) return [{ type: 'text', text }]
+
+  const pattern = new RegExp(`(${escaped.join('|')})(\\{[\\s\\S]*?\\}\\s*(?=\\n|$)|\\[[\\s\\S]*?\\]\\s*(?=\\n|$))`, 'g')
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = pattern.exec(text)) !== null) {
+    const before = text.slice(lastIndex, match.index)
+    if (before) parts.push({ type: 'text', text: before })
+
+    const name = match[1]
+    const jsonPart = match[2].trim()
+    const input = parseJson(jsonPart, null)
+    if (input && typeof input === 'object' && !Array.isArray(input)) {
+      parts.push({ type: 'tool_use', name, input })
+      lastIndex = pattern.lastIndex
+    } else {
+      // Not valid JSON, treat as text
+      parts.push({ type: 'text', text: match[0] })
+      lastIndex = match.index + match[0].length
+    }
+  }
+
+  const after = text.slice(lastIndex)
+  if (after) parts.push({ type: 'text', text: after })
+
+  return parts.length ? parts : [{ type: 'text', text }]
 }
 
 function parseLooseTaggedToolUse(text: string): ParsedToolUse | null {
@@ -1249,11 +1342,45 @@ function parsePlainToolLines(text: string, knownTools: KnownTool[]): ParsedToolU
     }]
   }
 
+  // DeepSeek-V4 (and some other models) intermittently emit tool calls as
+  // raw text in the content field instead of structured tool_calls:
+  //   "some text... functionName{\"key\": \"value\"}"
+  // Try to extract any known tool name immediately followed by a JSON object.
+  const fused = parseFusedToolJson(text, knownTools)
+  if (fused.length) return fused
+
   const lines = text.split('\n').map((line) => line.trim()).filter(Boolean)
   if (!lines.length || lines.some((line) => line.length > 500)) return []
 
   const parsed = lines.map((line) => parsePlainToolLine(line, knownTools))
   return parsed.every(Boolean) ? parsed as ParsedToolUse[] : []
+}
+
+/**
+ * Handles models (e.g. DeepSeek-V4) that write tool calls fused into prose:
+ *   "Let me search. WebSearch{\"query\": \"foo\"}"
+ *   "batch_crawl_url_and_answer{\"jobs\": [...]}"
+ */
+function parseFusedToolJson(text: string, knownTools: KnownTool[]): ParsedToolUse[] {
+  const results: ParsedToolUse[] = []
+  const toolNames = knownTools.map((t) => t.name).sort((a, b) => b.length - a.length)
+  // Build a regex that matches any known tool name followed immediately by a JSON object/array
+  const escaped = toolNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  if (!escaped.length) return []
+
+  const pattern = new RegExp(`(${escaped.join('|')})(\\{[\\s\\S]*?\\}\\s*(?=\\n|$)|\\[[\\s\\S]*?\\]\\s*(?=\\n|$))`, 'g')
+  let match: RegExpExecArray | null
+
+  while ((match = pattern.exec(text)) !== null) {
+    const name = match[1]
+    const jsonPart = match[2].trim()
+    const input = parseJson(jsonPart, null)
+    if (input && typeof input === 'object' && !Array.isArray(input)) {
+      results.push({ name, input })
+    }
+  }
+
+  return results
 }
 
 function parsePlainToolLine(line: string, knownTools: KnownTool[]): ParsedToolUse | null {
@@ -1385,8 +1512,17 @@ function shouldFallbackToSyntheticStream(error: any): boolean {
   return message.includes('provider returned error') || message.includes('unsupported')
 }
 
-function shouldUseSyntheticStream(body: any): boolean {
-  return Array.isArray(body?.tools) && body.tools.length > 0
+function shouldUseSyntheticStream(body: any, config: ProxyConfig): boolean {
+  // Default to native SSE streaming for speed. Only force synthetic mode
+  // for upstream models known to intermittently emit tool calls as plain
+  // text inside the content field (e.g. DeepSeek-V4), because the proxy
+  // needs the full response to parse and split fused tool calls correctly.
+  const resolvedModel = resolveModel(config, body?.model)
+  const lowerModel = resolvedModel.toLowerCase()
+  if (lowerModel.includes('deepseek') || lowerModel.includes('qwen')) {
+    return Array.isArray(body?.tools) && body.tools.length > 0
+  }
+  return false
 }
 
 function shouldRetryNarratedToolTurn(original: any, openai: any): boolean {
@@ -1451,7 +1587,7 @@ function looksLikeNarratedNextAction(text: string): boolean {
     && actions.some((action) => lower.includes(action))
 }
 
-function createProxyLogger(logPath: string, source: 'electron' | 'standalone'): ProxyLogger {
+function createProxyLogger(logPath: string, source: 'electron'): ProxyLogger {
   const path = logPath
 
   return {

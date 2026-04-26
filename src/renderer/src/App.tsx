@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -271,6 +271,12 @@ export default function App() {
   const [testResult, setTestResult] = useState('')
   const [toasts, setToasts] = useState<Toast[]>([])
   const [appUpdateState, setAppUpdateState] = useState<AppUpdateState | null>(null)
+  const [configDirty, setConfigDirty] = useState(false)
+  const configDirtyRef = useRef(false)
+
+  useEffect(() => {
+    configDirtyRef.current = configDirty
+  }, [configDirty])
 
   const modelOptions = useMemo(() => {
     return Array.from(new Set([...RECOMMENDED_MODELS, ...models])).sort()
@@ -282,15 +288,15 @@ export default function App() {
     window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 3600)
   }
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     const api = javiProxyApi()
     const [nextConfig, nextStatus] = await Promise.all([
       api.getConfig(),
       api.getStatus()
     ])
-    setConfig(nextConfig)
+    if (!configDirtyRef.current) setConfig(nextConfig)
     setStatus(nextStatus)
-  }
+  }, [])
 
   const refreshModels = async () => {
     try {
@@ -309,7 +315,7 @@ export default function App() {
     void refreshModels()
     const id = window.setInterval(() => void refresh(), 5000)
     return () => window.clearInterval(id)
-  }, [])
+  }, [refresh])
 
   useEffect(() => {
     const api = javiProxyApi()
@@ -333,6 +339,7 @@ export default function App() {
       if (apiKey.trim()) payload.apiKey = apiKey.trim()
       const nextConfig = await javiProxyApi().setConfig(payload)
       setConfig(nextConfig)
+      setConfigDirty(false)
       setApiKey('')
       await refresh()
       toast('Configuracion guardada', 'success')
@@ -443,6 +450,7 @@ export default function App() {
 
   const updateConfig = <K extends keyof JaviProxyConfig>(key: K, value: JaviProxyConfig[K]) => {
     setConfig((current) => ({ ...current, [key]: value }))
+    setConfigDirty(true)
   }
 
   const isReady = Boolean(status?.running && config.hasApiKey && !status?.error)
@@ -533,7 +541,7 @@ export default function App() {
           <div className="sidebar-section">
             <div className="sidebar-section-title">Acciones</div>
             <button className="sidebar-action" onClick={saveConfig} disabled={saving}>
-              <Save size={15} /> Guardar
+              <Save size={15} /> {configDirty ? 'Guardar cambios *' : 'Guardar'}
             </button>
             <button className="sidebar-action" onClick={toggleProxy} disabled={proxyToggling}>
               <Power size={15} /> {status?.running ? 'Apagar proxy' : 'Encender proxy'}
