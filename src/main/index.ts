@@ -5,17 +5,24 @@ import type { IpcMainInvokeEvent, MenuItemConstructorOptions, OpenDialogOptions 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
-import { startProxyServer, fetchModels, testUpstream, effectiveModel } from './proxy'
-import type { ProxyConfig, ProxyServerHandle } from './proxy'
+import {
+  effectiveModel,
+  fetchModels,
+  inferProviderFromBaseUrl,
+  normalizeProviderId,
+  normalizeUpstreamBase,
+  providerPreset,
+  startProxyServer,
+  testUpstream
+} from './proxy'
+import type { ProviderId, ProxyConfig, ProxyServerHandle } from './proxy'
 import { setupAppUpdater } from './updater'
 
 const isDev = process.env.NODE_ENV === 'development'
 const DEFAULT_PORT = Number(process.env.PORT || 8787)
 const DEFAULT_HOST = process.env.HOST || '127.0.0.1'
-const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
-const LEGACY_ZEN_BASE_URL = 'https://opencode.ai/zen/v1'
 
-interface StoredConfig {
+interface StoredProviderConfig {
   upstreamBase?: string
   apiKeyEncrypted?: string
   apiKeyPlain?: string
@@ -24,6 +31,12 @@ interface StoredConfig {
   forceModel?: boolean
   forceModelValue?: string
   modelMapJson?: string
+  extraBodyJson?: string
+}
+
+interface StoredConfig extends StoredProviderConfig {
+  provider?: ProviderId
+  providerSettings?: Partial<Record<ProviderId, StoredProviderConfig>>
 }
 
 let proxyHandle: ProxyServerHandle | null = null
@@ -65,69 +78,224 @@ function decryptSecret(value: string): string {
   }
 }
 
-function getStoredApiKey(store = readStore()): string {
-  if (process.env.OPENCODE_API_KEY || process.env.OPENCODE_GO_API_KEY) {
-    return process.env.OPENCODE_API_KEY || process.env.OPENCODE_GO_API_KEY || ''
+function selectedProvider(store = readStore()): ProviderId {
+  const envProvider = process.env.JAVIPROXY_PROVIDER
+  if (envProvider) return normalizeProviderId(envProvider)
+  if (store.provider) return normalizeProviderId(store.provider)
+  return inferProviderFromBaseUrl(process.env.JAVIPROXY_BASE_URL || process.env.OPENCODE_BASE_URL || store.upstreamBase)
+}
+
+function legacyProvider(store: StoredConfig): ProviderId {
+  return inferProviderFromBaseUrl(store.upstreamBase)
+}
+
+function getStoredProviderSettings(store: StoredConfig, provider: ProviderId): StoredProviderConfig {
+  const explicit = store.providerSettings?.[provider] || {}
+  const legacyBelongsToProvider = provider === (store.provider ? normalizeProviderId(store.provider) : legacyProvider(store))
+  if (!legacyBelongsToProvider) return explicit
+
+  return {
+    upstreamBase: store.upstreamBase,
+    apiKeyEncrypted: store.apiKeyEncrypted,
+    apiKeyPlain: store.apiKeyPlain,
+    model: store.model,
+    fastModel: store.fastModel,
+    forceModel: store.forceModel,
+    forceModelValue: store.forceModelValue,
+    modelMapJson: store.modelMapJson,
+    extraBodyJson: store.extraBodyJson,
+    ...explicit
   }
-  if (store.apiKeyEncrypted) return decryptSecret(store.apiKeyEncrypted)
-  if (store.apiKeyPlain) {
-    const apiKey = store.apiKeyPlain
-    writeStore({ ...store, apiKeyPlain: undefined, apiKeyEncrypted: encryptSecret(apiKey) })
+}
+
+function updateStoredProviderSettings(store: StoredConfig, provider: ProviderId, settings: StoredProviderConfig): StoredConfig {
+  return {
+    ...store,
+    providerSettings: {
+      ...(store.providerSettings || {}),
+      [provider]: settings
+    }
+  }
+}
+
+function providerApiKeyEnv(provider: ProviderId): string {
+  if (process.env.JAVIPROXY_API_KEY) return normalizeApiKeyInput(process.env.JAVIPROXY_API_KEY)
+  if (provider === 'nvidia') {
+    return normalizeApiKeyInput(process.env.NVIDIA_API_KEY || process.env.NVIDIA_NIM_API_KEY || process.env.NVAPI_KEY || '')
+  }
+  return normalizeApiKeyInput(process.env.OPENCODE_API_KEY || process.env.OPENCODE_GO_API_KEY || '')
+}
+
+function providerBaseUrlEnv(provider: ProviderId): string {
+  if (process.env.JAVIPROXY_BASE_URL) return process.env.JAVIPROXY_BASE_URL
+  if (provider === 'nvidia') return process.env.NVIDIA_BASE_URL || process.env.NVIDIA_NIM_BASE_URL || ''
+  return process.env.OPENCODE_BASE_URL || ''
+}
+
+function providerModelEnv(provider: ProviderId): string {
+  if (process.env.JAVIPROXY_MODEL) return process.env.JAVIPROXY_MODEL
+  if (provider === 'nvidia') return process.env.NVIDIA_MODEL || process.env.NVIDIA_NIM_MODEL || ''
+  return process.env.OPENCODE_GO_MODEL || ''
+}
+
+function providerFastModelEnv(provider: ProviderId): string {
+  if (process.env.JAVIPROXY_FAST_MODEL) return process.env.JAVIPROXY_FAST_MODEL
+  if (provider === 'nvidia') return process.env.NVIDIA_FAST_MODEL || process.env.NVIDIA_NIM_FAST_MODEL || ''
+  return process.env.OPENCODE_GO_FAST_MODEL || ''
+}
+
+function providerForceModelEnv(provider: ProviderId): string {
+  if (process.env.JAVIPROXY_FORCE_MODEL) return process.env.JAVIPROXY_FORCE_MODEL
+  if (provider === 'nvidia') return process.env.NVIDIA_FORCE_MODEL || process.env.NVIDIA_NIM_FORCE_MODEL || ''
+  return process.env.OPENCODE_FORCE_MODEL || ''
+}
+
+function providerModelMapEnv(provider: ProviderId): string | undefined {
+  if (process.env.JAVIPROXY_MODEL_MAP_JSON !== undefined) return process.env.JAVIPROXY_MODEL_MAP_JSON
+  if (provider === 'nvidia') return process.env.NVIDIA_MODEL_MAP_JSON
+  return process.env.OPENCODE_MODEL_MAP_JSON
+}
+
+function providerExtraBodyEnv(provider: ProviderId): string | undefined {
+  if (process.env.JAVIPROXY_EXTRA_BODY_JSON !== undefined) return process.env.JAVIPROXY_EXTRA_BODY_JSON
+  if (provider === 'nvidia') return process.env.NVIDIA_EXTRA_BODY_JSON || process.env.NVIDIA_NIM_EXTRA_BODY_JSON
+  return process.env.OPENCODE_EXTRA_BODY_JSON
+}
+
+function getStoredApiKey(store: StoredConfig, provider: ProviderId): string {
+  const envKey = providerApiKeyEnv(provider)
+  if (envKey) return envKey
+
+  const settings = getStoredProviderSettings(store, provider)
+  if (settings.apiKeyEncrypted) return normalizeApiKeyInput(decryptSecret(settings.apiKeyEncrypted))
+  if (settings.apiKeyPlain) {
+    const apiKey = normalizeApiKeyInput(settings.apiKeyPlain)
+    const nextSettings = {
+      ...settings,
+      apiKeyPlain: undefined,
+      apiKeyEncrypted: encryptSecret(apiKey)
+    }
+    writeStore({
+      ...updateStoredProviderSettings(store, provider, nextSettings),
+      apiKeyPlain: undefined
+    })
     return apiKey
   }
   return ''
 }
 
-function normalizeBaseUrl(value: string): string {
-  const normalized = String(value || OPENCODE_GO_BASE_URL).replace(/\/+$/g, '')
-  return normalized === LEGACY_ZEN_BASE_URL ? OPENCODE_GO_BASE_URL : normalized
+function normalizeApiKeyInput(value: string): string {
+  let cleaned = String(value || '').trim()
+  cleaned = cleaned.replace(/^["']|["']$/g, '').trim()
+
+  const authorizationMatch = cleaned.match(/^authorization\s*:\s*bearer\s+(.+)$/i)
+  if (authorizationMatch) cleaned = authorizationMatch[1].trim()
+
+  const bearerMatch = cleaned.match(/^bearer\s+(.+)$/i)
+  if (bearerMatch) cleaned = bearerMatch[1].trim()
+
+  return cleaned.replace(/^["']|["']$/g, '').trim()
 }
 
 function getConfig(): ProxyConfig {
   const store = readStore()
-  const model = process.env.OPENCODE_GO_MODEL || store.model || 'kimi-k2.6'
-  const forceModelValue = process.env.OPENCODE_FORCE_MODEL || store.forceModelValue || model
+  const provider = selectedProvider(store)
+  const preset = providerPreset(provider)
+  const settings = getStoredProviderSettings(store, provider)
+  const model = providerModelEnv(provider) || settings.model || preset.defaultModel
+  const forceModelValue = providerForceModelEnv(provider) || settings.forceModelValue || model
+  const modelMapJson = providerModelMapEnv(provider) ?? settings.modelMapJson ?? ''
+  const extraBodyJson = providerExtraBodyEnv(provider) ?? settings.extraBodyJson ?? preset.defaultExtraBodyJson
   return {
-    upstreamBase: normalizeBaseUrl(process.env.OPENCODE_BASE_URL || store.upstreamBase || OPENCODE_GO_BASE_URL),
-    apiKey: getStoredApiKey(store),
+    provider,
+    upstreamBase: normalizeUpstreamBase(provider, providerBaseUrlEnv(provider) || settings.upstreamBase || preset.upstreamBase),
+    apiKey: getStoredApiKey(store, provider),
     model,
-    fastModel: process.env.OPENCODE_GO_FAST_MODEL || store.fastModel || 'minimax-m2.5',
-    forceModel: typeof store.forceModel === 'boolean' ? store.forceModel : true,
+    fastModel: providerFastModelEnv(provider) || settings.fastModel || preset.defaultFastModel,
+    forceModel: typeof settings.forceModel === 'boolean' ? settings.forceModel : true,
     forceModelValue,
-    modelMapJson: process.env.OPENCODE_MODEL_MAP_JSON || store.modelMapJson || ''
+    modelMapJson,
+    extraBodyJson
   }
 }
 
 function saveConfig(input: Partial<ProxyConfig> & { apiKey?: string }): ProxyConfig {
   const current = readStore()
-  const next: StoredConfig = {
-    ...current,
-    upstreamBase: input.upstreamBase ? normalizeBaseUrl(input.upstreamBase) : current.upstreamBase,
-    model: input.model || current.model || 'kimi-k2.6',
-    fastModel: input.fastModel || current.fastModel || 'minimax-m2.5',
-    forceModel: typeof input.forceModel === 'boolean' ? input.forceModel : current.forceModel ?? true,
-    forceModelValue: input.forceModelValue || input.model || current.forceModelValue || current.model || 'kimi-k2.6',
-    modelMapJson: typeof input.modelMapJson === 'string' ? input.modelMapJson : current.modelMapJson || ''
+  const provider = normalizeProviderId(input.provider || selectedProvider(current))
+  const preset = providerPreset(provider)
+  const settings = getStoredProviderSettings(current, provider)
+  const extraBodyJson = typeof input.extraBodyJson === 'string' ? input.extraBodyJson : settings.extraBodyJson ?? preset.defaultExtraBodyJson
+  validateExtraBodyJson(extraBodyJson)
+  const nextSettings: StoredProviderConfig = {
+    ...settings,
+    upstreamBase: normalizeUpstreamBase(provider, input.upstreamBase || settings.upstreamBase || preset.upstreamBase),
+    model: input.model || settings.model || preset.defaultModel,
+    fastModel: input.fastModel || settings.fastModel || preset.defaultFastModel,
+    forceModel: typeof input.forceModel === 'boolean' ? input.forceModel : settings.forceModel ?? true,
+    forceModelValue: input.forceModelValue || input.model || settings.forceModelValue || settings.model || preset.defaultModel,
+    modelMapJson: typeof input.modelMapJson === 'string' ? input.modelMapJson : settings.modelMapJson || '',
+    extraBodyJson
   }
 
-  if (typeof input.apiKey === 'string' && input.apiKey.trim()) {
-    next.apiKeyEncrypted = encryptSecret(input.apiKey.trim())
-    next.apiKeyPlain = undefined
+  const normalizedApiKey = typeof input.apiKey === 'string' ? normalizeApiKeyInput(input.apiKey) : ''
+  if (normalizedApiKey) {
+    nextSettings.apiKeyEncrypted = encryptSecret(normalizedApiKey)
+    nextSettings.apiKeyPlain = undefined
+  }
+
+  let updatedStore = updateStoredProviderSettings(current, provider, nextSettings)
+  const legacy = legacyProvider(current)
+  if (!current.provider && legacy !== provider && !updatedStore.providerSettings?.[legacy]) {
+    updatedStore = updateStoredProviderSettings(updatedStore, legacy, getStoredProviderSettings(current, legacy))
+  }
+
+  const next: StoredConfig = {
+    ...updatedStore,
+    provider,
+    upstreamBase: nextSettings.upstreamBase,
+    model: nextSettings.model,
+    fastModel: nextSettings.fastModel,
+    forceModel: nextSettings.forceModel,
+    forceModelValue: nextSettings.forceModelValue,
+    modelMapJson: nextSettings.modelMapJson,
+    extraBodyJson: nextSettings.extraBodyJson
   }
 
   writeStore(next)
   return getConfig()
 }
 
+function validateExtraBodyJson(value: string): void {
+  const cleaned = value.trim()
+  if (!cleaned) return
+  try {
+    const parsed = JSON.parse(cleaned)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Parametros extra debe ser un objeto JSON valido.')
+    }
+  } catch (error: any) {
+    throw new Error(error?.message === 'Parametros extra debe ser un objeto JSON valido.'
+      ? error.message
+      : 'Parametros extra debe ser un objeto JSON valido.')
+  }
+}
+
 function publicConfig() {
   const config = getConfig()
+  const preset = providerPreset(config.provider)
   return {
+    provider: config.provider,
+    providerLabel: preset.label,
+    providerDocsUrl: preset.docsUrl,
+    apiKeyLabel: preset.apiKeyLabel,
+    apiKeyPlaceholder: preset.apiKeyPlaceholder,
     upstreamBase: config.upstreamBase,
     model: config.model,
     fastModel: config.fastModel,
     forceModel: config.forceModel,
     forceModelValue: config.forceModelValue,
     modelMapJson: config.modelMapJson,
+    extraBodyJson: config.extraBodyJson,
     effectiveModel: effectiveModel(config),
     hasApiKey: Boolean(config.apiKey),
     maskedApiKey: maskKey(config.apiKey),
@@ -150,6 +318,8 @@ function statusPayload() {
     port: DEFAULT_PORT,
     baseUrl: `http://${DEFAULT_HOST}:${DEFAULT_PORT}`,
     messagesUrl: `http://${DEFAULT_HOST}:${DEFAULT_PORT}/v1/messages`,
+    provider: config.provider,
+    providerLabel: providerPreset(config.provider).label,
     upstreamBase: config.upstreamBase,
     effectiveModel: effectiveModel(config),
     hasApiKey: Boolean(config.apiKey),
@@ -315,13 +485,15 @@ function buildCommandPayload() {
 
 function buildVSCodeSettingsPayload() {
   const base = `http://${DEFAULT_HOST}:${DEFAULT_PORT}`
+  const config = getConfig()
+  const preset = providerPreset(config.provider)
   return {
     'claudeCode.environmentVariables': [
       { name: 'ANTHROPIC_BASE_URL', value: base },
       { name: 'ANTHROPIC_AUTH_TOKEN', value: 'javiproxy-local' },
       { name: 'ANTHROPIC_CUSTOM_MODEL_OPTION', value: 'claude-sonnet-4-6' },
       { name: 'ANTHROPIC_CUSTOM_MODEL_OPTION_NAME', value: 'JaviProxy' },
-      { name: 'ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION', value: 'OpenCode Go through JaviProxy' },
+      { name: 'ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION', value: `${preset.label} through JaviProxy` },
       { name: 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', value: '1' },
       { name: 'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS', value: '1' },
       { name: 'ENABLE_TOOL_SEARCH', value: 'false' }
@@ -456,7 +628,7 @@ ipcMain.handle('proxy:status', async () => statusPayload())
 ipcMain.handle('proxy:start', async () => startProxy())
 ipcMain.handle('proxy:stop', async () => stopProxy())
 ipcMain.handle('proxy:models', async () => fetchModels(getConfig()))
-ipcMain.handle('proxy:test', async () => testUpstream(getConfig()))
+ipcMain.handle('proxy:test', async () => testUpstream(getConfig(), getProxyLogPath()))
 ipcMain.handle('app:openPath', async (_event, targetPath: string) => {
   const result = await shell.openPath(targetPath)
   if (result) throw new Error(result)

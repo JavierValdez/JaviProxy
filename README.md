@@ -1,6 +1,6 @@
 # JaviProxy
 
-JaviProxy es una app de escritorio para usar OpenCode Go como router local para Claude Code.
+JaviProxy es una app de escritorio para usar proveedores OpenAI-compatible como router local para Claude Code. Incluye presets para OpenCode Go y NVIDIA NIM.
 
 Stack igual al de JaviSVN:
 
@@ -28,19 +28,49 @@ La ventana real de Electron es la que permite guardar la API key, encender o apa
 
 En JaviProxy:
 
-1. Guarda tu API key de OpenCode Go.
-2. Deja el modelo en `kimi-k2.6`.
-3. Usa el boton `Encender proxy`.
-4. Prueba la conexion.
-5. Abre Claude Code o configura VS Code desde la misma UI.
+1. Elige el proveedor.
+2. Guarda la API key del proveedor seleccionado.
+3. Elige el modelo principal y rapido.
+4. Usa el boton `Encender proxy`.
+5. Prueba la conexion.
+6. Abre Claude Code o configura VS Code desde la misma UI.
 
-JaviProxy usa el endpoint de OpenCode Go:
+Presets incluidos:
+
+- OpenCode Go: `https://opencode.ai/zen/go/v1`, modelo default `kimi-k2.6`.
+- NVIDIA NIM: `https://integrate.api.nvidia.com/v1/chat/completions`, modelo default `moonshotai/kimi-k2.6`.
+
+Para NVIDIA puedes dejar `Parametros extra del proveedor` con:
+
+```json
+{
+  "chat_template_kwargs": {
+    "thinking": true
+  }
+}
+```
+
+Ese JSON se mezcla en el payload `chat/completions` y permite opciones especificas del proveedor.
+
+## OpenCode Go
+
+JaviProxy usa este endpoint para OpenCode Go:
 
 ```text
 https://opencode.ai/zen/go/v1
 ```
 
 No uses `https://opencode.ai/zen/v1` para Go; ese endpoint pertenece a Zen pay-as-you-go y puede responder `Insufficient balance` aunque tu suscripcion Go este activa.
+
+## NVIDIA NIM
+
+JaviProxy acepta el `invoke_url` completo de NVIDIA NIM:
+
+```text
+https://integrate.api.nvidia.com/v1/chat/completions
+```
+
+Tambien puedes pegar la base `https://integrate.api.nvidia.com/v1`; JaviProxy la normaliza y guarda como el `invoke_url` completo `/chat/completions`.
 
 ## VS Code
 
@@ -58,7 +88,7 @@ La UI de JaviProxy incluye una seccion `VS Code` que puede aplicar estas variabl
 
 ## Compatibilidad
 
-JaviProxy traduce el contrato Anthropic de Claude Code hacia `chat/completions` de OpenCode Go para modelos como `kimi-k2.6`. Incluye compatibilidad para:
+JaviProxy traduce el contrato Anthropic de Claude Code hacia `chat/completions` de proveedores OpenAI-compatible. Incluye compatibilidad para:
 
 - texto normal y streaming SSE
 - `tool_use` / `tool_result`

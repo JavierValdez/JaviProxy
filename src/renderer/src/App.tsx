@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Clipboard,
   Code2,
+  Cpu,
   KeyRound,
   Play,
   Power,
@@ -18,20 +19,105 @@ import {
 } from 'lucide-react'
 import appIcon from './assets/icon.png'
 
+type ProviderId = 'opencode' | 'nvidia'
+
 interface Toast {
   id: number
   message: string
   type: 'success' | 'error' | 'info'
 }
 
+interface ProviderUiPreset {
+  id: ProviderId
+  label: string
+  apiKeyLabel: string
+  apiKeyPlaceholder: string
+  upstreamBase: string
+  defaultModel: string
+  defaultFastModel: string
+  defaultExtraBodyJson: string
+  docsUrl: string
+  modelIds: string[]
+}
+
+const PROVIDER_PRESETS: Record<ProviderId, ProviderUiPreset> = {
+  opencode: {
+    id: 'opencode',
+    label: 'OpenCode Go',
+    apiKeyLabel: 'OpenCode Go API key',
+    apiKeyPlaceholder: 'oc_...',
+    upstreamBase: 'https://opencode.ai/zen/go/v1',
+    defaultModel: 'kimi-k2.6',
+    defaultFastModel: 'minimax-m2.5',
+    defaultExtraBodyJson: '',
+    docsUrl: 'https://opencode.ai/go',
+    modelIds: [
+      'deepseek-v4-flash',
+      'deepseek-v4-pro',
+      'glm-5',
+      'glm-5.1',
+      'kimi-k2.5',
+      'kimi-k2.6',
+      'mimo-v2-omni',
+      'mimo-v2-pro',
+      'mimo-v2.5',
+      'mimo-v2.5-pro',
+      'minimax-m2.5',
+      'minimax-m2.7',
+      'qwen3.5-plus',
+      'qwen3.6-plus'
+    ]
+  },
+  nvidia: {
+    id: 'nvidia',
+    label: 'NVIDIA NIM',
+    apiKeyLabel: 'NVIDIA API key',
+    apiKeyPlaceholder: 'nvapi-...',
+    upstreamBase: 'https://integrate.api.nvidia.com/v1/chat/completions',
+    defaultModel: 'moonshotai/kimi-k2.6',
+    defaultFastModel: 'deepseek-ai/deepseek-v4-flash',
+    defaultExtraBodyJson: '{\n  "chat_template_kwargs": {\n    "thinking": true\n  }\n}',
+    docsUrl: 'https://docs.api.nvidia.com/nim/reference/llm-apis',
+    modelIds: [
+      'moonshotai/kimi-k2.6',
+      'moonshotai/kimi-k2-thinking',
+      'moonshotai/kimi-k2-instruct',
+      'deepseek-ai/deepseek-v4-flash',
+      'deepseek-ai/deepseek-v4-pro',
+      'minimaxai/minimax-m2.5',
+      'minimaxai/minimax-m2.7',
+      'openai/gpt-oss-120b',
+      'openai/gpt-oss-20b',
+      'qwen/qwen3-coder-480b-a35b-instruct',
+      'qwen/qwen3-next-80b-a3b-thinking',
+      'qwen/qwen3-5-122b-a10b',
+      'z-ai/glm5.1',
+      'z-ai/glm4.7',
+      'meta/llama-3.1-8b-instruct',
+      'meta/llama-3.3-70b-instruct',
+      'mistralai/devstral-2-123b-instruct-2512',
+      'nvidia/llama-3.3-nemotron-super-49b-v1.5',
+      'nvidia/nemotron-3-super-120b-a12b'
+    ]
+  }
+}
+
+const DEFAULT_PROVIDER = PROVIDER_PRESETS.opencode
+
 const FALLBACK_CONFIG: JaviProxyConfig = {
-  upstreamBase: 'https://opencode.ai/zen/go/v1',
-  model: 'kimi-k2.6',
-  fastModel: 'minimax-m2.5',
+  provider: DEFAULT_PROVIDER.id,
+  providerLabel: DEFAULT_PROVIDER.label,
+  providerDocsUrl: DEFAULT_PROVIDER.docsUrl,
+  apiKeyLabel: DEFAULT_PROVIDER.apiKeyLabel,
+  apiKeyPlaceholder: DEFAULT_PROVIDER.apiKeyPlaceholder,
+  upstreamBase: DEFAULT_PROVIDER.upstreamBase,
+  model: DEFAULT_PROVIDER.defaultModel,
+  fastModel: DEFAULT_PROVIDER.defaultFastModel,
   forceModel: true,
-  forceModelValue: 'kimi-k2.6',
+  forceModelValue: DEFAULT_PROVIDER.defaultModel,
   modelMapJson: '',
-  effectiveModel: 'kimi-k2.6',
+  extraBodyJson: DEFAULT_PROVIDER.defaultExtraBodyJson,
+  effectiveModel: DEFAULT_PROVIDER.defaultModel,
   hasApiKey: false,
   maskedApiKey: '',
   storePath: '',
@@ -45,23 +131,6 @@ const FALLBACK_CONFIG: JaviProxyConfig = {
     windows: ''
   }
 }
-
-const RECOMMENDED_MODELS = [
-  'deepseek-v4-flash',
-  'deepseek-v4-pro',
-  'glm-5',
-  'glm-5.1',
-  'kimi-k2.5',
-  'kimi-k2.6',
-  'mimo-v2-omni',
-  'mimo-v2-pro',
-  'mimo-v2.5',
-  'mimo-v2.5-pro',
-  'minimax-m2.5',
-  'minimax-m2.7',
-  'qwen3.5-plus',
-  'qwen3.6-plus'
-]
 
 const LOCAL_PROXY_BASE_URL = 'http://127.0.0.1:8787'
 
@@ -121,6 +190,8 @@ const browserFallbackApi: Window['javiProxy'] = {
         port: json.port || 8787,
         baseUrl: LOCAL_PROXY_BASE_URL,
         messagesUrl: json.messagesUrl || `${LOCAL_PROXY_BASE_URL}/v1/messages`,
+        provider: json.provider || FALLBACK_CONFIG.provider,
+        providerLabel: json.providerLabel || FALLBACK_CONFIG.providerLabel,
         upstreamBase: json.upstreamBase || FALLBACK_CONFIG.upstreamBase,
         effectiveModel: json.effectiveModel || FALLBACK_CONFIG.effectiveModel,
         hasApiKey: Boolean(json.hasApiKey),
@@ -135,6 +206,8 @@ const browserFallbackApi: Window['javiProxy'] = {
         port: 8787,
         baseUrl: LOCAL_PROXY_BASE_URL,
         messagesUrl: `${LOCAL_PROXY_BASE_URL}/v1/messages`,
+        provider: FALLBACK_CONFIG.provider,
+        providerLabel: FALLBACK_CONFIG.providerLabel,
         upstreamBase: FALLBACK_CONFIG.upstreamBase,
         effectiveModel: FALLBACK_CONFIG.effectiveModel,
         hasApiKey: false,
@@ -153,7 +226,7 @@ const browserFallbackApi: Window['javiProxy'] = {
     const json = await response.json()
     return {
       ok: response.ok,
-      models: Array.isArray(json.data) ? json.data.map((model: any) => String(model.id)) : RECOMMENDED_MODELS,
+      models: Array.isArray(json.data) ? json.data.map((model: any) => String(model.id)) : DEFAULT_PROVIDER.modelIds,
       raw: json
     }
   },
@@ -251,16 +324,24 @@ function friendlyError(error: any): string {
     .replace(/^Error:\s*/i, '')
 
   if (/Insufficient balance/i.test(cleaned)) {
-    return `${cleaned}\n\nJaviProxy debe usar https://opencode.ai/zen/go/v1 para tu suscripcion OpenCode Go. Si sigues viendo este error, revisa que la API key pertenezca al workspace Go correcto.`
+    return `${cleaned}\n\nRevisa que la API key pertenezca al proveedor seleccionado y que la base URL corresponda a ese proveedor. Para OpenCode Go usa https://opencode.ai/zen/go/v1.`
   }
 
   return cleaned
 }
 
+function validateExtraBodyJson(value: string): boolean {
+  const cleaned = value.trim()
+  if (!cleaned) return true
+  const parsed = JSON.parse(cleaned)
+  return Boolean(parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+}
+
 export default function App() {
   const [config, setConfig] = useState<JaviProxyConfig>(FALLBACK_CONFIG)
   const [status, setStatus] = useState<JaviProxyStatus | null>(null)
-  const [models, setModels] = useState<string[]>(RECOMMENDED_MODELS)
+  const [models, setModels] = useState<string[]>(DEFAULT_PROVIDER.modelIds)
+  const [modelsProvider, setModelsProvider] = useState<ProviderId>(DEFAULT_PROVIDER.id)
   const [apiKey, setApiKey] = useState('')
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -279,8 +360,10 @@ export default function App() {
   }, [configDirty])
 
   const modelOptions = useMemo(() => {
-    return Array.from(new Set([...RECOMMENDED_MODELS, ...models])).sort()
-  }, [models])
+    const preset = PROVIDER_PRESETS[config.provider] || DEFAULT_PROVIDER
+    const fetchedModels = modelsProvider === config.provider ? models : []
+    return Array.from(new Set([...preset.modelIds, ...fetchedModels])).sort()
+  }, [config.provider, models, modelsProvider])
 
   const toast = (message: string, type: Toast['type'] = 'info') => {
     const id = Date.now()
@@ -303,6 +386,7 @@ export default function App() {
       const result = await javiProxyApi().listModels()
       if (Array.isArray(result.models) && result.models.length) {
         setModels(result.models)
+        setModelsProvider(config.provider)
         toast('Modelos actualizados', 'success')
       }
     } catch (error: any) {
@@ -325,28 +409,49 @@ export default function App() {
     return () => { unsub?.() }
   }, [])
 
-  const saveConfig = async () => {
+  const buildConfigPayload = (): Partial<JaviProxyConfig> & { apiKey?: string } => {
+    if (!validateExtraBodyJson(config.extraBodyJson)) {
+      throw new Error('Parametros extra debe ser un objeto JSON valido.')
+    }
+
+    const payload: Partial<JaviProxyConfig> & { apiKey?: string } = {
+      provider: config.provider,
+      upstreamBase: config.upstreamBase,
+      model: config.model,
+      fastModel: config.fastModel,
+      forceModel: config.forceModel,
+      forceModelValue: config.forceModelValue || config.model,
+      modelMapJson: config.modelMapJson,
+      extraBodyJson: config.extraBodyJson
+    }
+    if (apiKey.trim()) payload.apiKey = apiKey.trim()
+    return payload
+  }
+
+  const persistConfig = async (showToast = true): Promise<JaviProxyConfig> => {
     setSaving(true)
     try {
-      const payload: Partial<JaviProxyConfig> & { apiKey?: string } = {
-        upstreamBase: config.upstreamBase,
-        model: config.model,
-        fastModel: config.fastModel,
-        forceModel: config.forceModel,
-        forceModelValue: config.forceModelValue || config.model,
-        modelMapJson: config.modelMapJson
-      }
-      if (apiKey.trim()) payload.apiKey = apiKey.trim()
+      const payload = buildConfigPayload()
       const nextConfig = await javiProxyApi().setConfig(payload)
       setConfig(nextConfig)
       setConfigDirty(false)
       setApiKey('')
       await refresh()
-      toast('Configuracion guardada', 'success')
+      if (showToast) toast('Configuracion guardada', 'success')
+      return nextConfig
     } catch (error: any) {
-      toast(friendlyError(error) || 'No se pudo guardar', 'error')
+      if (showToast) toast(friendlyError(error) || 'No se pudo guardar', 'error')
+      throw error
     } finally {
       setSaving(false)
+    }
+  }
+
+  const saveConfig = async () => {
+    try {
+      await persistConfig(true)
+    } catch {
+      // The save path already reports user-facing errors.
     }
   }
 
@@ -354,6 +459,9 @@ export default function App() {
     setTesting(true)
     setTestResult('')
     try {
+      if (apiKey.trim() || configDirty) {
+        await persistConfig(false)
+      }
       const result = await javiProxyApi().testProxy()
       setTestResult(`${result.model}: ${result.message}`)
       toast('Conexion verificada', 'success')
@@ -453,8 +561,34 @@ export default function App() {
     setConfigDirty(true)
   }
 
+  const changeProvider = (provider: ProviderId) => {
+    const preset = PROVIDER_PRESETS[provider] || DEFAULT_PROVIDER
+    setConfig((current) => ({
+      ...current,
+      provider: preset.id,
+      providerLabel: preset.label,
+      providerDocsUrl: preset.docsUrl,
+      apiKeyLabel: preset.apiKeyLabel,
+      apiKeyPlaceholder: preset.apiKeyPlaceholder,
+      upstreamBase: preset.upstreamBase,
+      model: preset.defaultModel,
+      fastModel: preset.defaultFastModel,
+      forceModelValue: preset.defaultModel,
+      extraBodyJson: preset.defaultExtraBodyJson,
+      effectiveModel: preset.defaultModel,
+      hasApiKey: false,
+      maskedApiKey: ''
+    }))
+    setApiKey('')
+    setModels(preset.modelIds)
+    setModelsProvider(provider)
+    setConfigDirty(true)
+  }
+
   const isReady = Boolean(status?.running && config.hasApiKey && !status?.error)
   const canOpenNativePath = Boolean(window.javiProxy?.openPath)
+  const canTest = Boolean(config.hasApiKey || apiKey.trim())
+  const provider = PROVIDER_PRESETS[config.provider] || DEFAULT_PROVIDER
 
   return (
     <div className="app">
@@ -509,12 +643,19 @@ export default function App() {
             <img src={appIcon} alt="JaviProxy" className="sidebar-logo" />
             <div>
               <div className="sidebar-appname">JaviProxy</div>
-              <div className="sidebar-subtitle">OpenCode Go Router</div>
+              <div className="sidebar-subtitle">{config.providerLabel} Router</div>
             </div>
           </div>
 
           <div className="sidebar-section">
             <div className="sidebar-section-title">Estado</div>
+            <div className="sidebar-item active-soft">
+              <Cpu size={16} />
+              <div className="sidebar-item-info">
+                <div className="sidebar-item-name">Proveedor</div>
+                <div className="sidebar-item-sub">{config.providerLabel}</div>
+              </div>
+            </div>
             <div className={`sidebar-item ${status?.ok ? 'active' : ''}`}>
               <Activity size={16} />
               <div className="sidebar-item-info">
@@ -546,7 +687,7 @@ export default function App() {
             <button className="sidebar-action" onClick={toggleProxy} disabled={proxyToggling}>
               <Power size={15} /> {status?.running ? 'Apagar proxy' : 'Encender proxy'}
             </button>
-            <button className="sidebar-action" onClick={testProxy} disabled={testing || !config.hasApiKey}>
+            <button className="sidebar-action" onClick={testProxy} disabled={testing || saving || !canTest}>
               <ShieldCheck size={15} /> Probar
             </button>
             <button className="sidebar-action" onClick={launchClaude} disabled={launching || !status?.ok}>
@@ -559,7 +700,7 @@ export default function App() {
           <header className="main-header">
             <div>
               <h1>JaviProxy</h1>
-              <p>Claude Code conectado a OpenCode Go con {config.effectiveModel}</p>
+              <p>Claude Code conectado a {config.providerLabel} con {config.effectiveModel}</p>
             </div>
             <div className="header-actions">
               <button className="btn" onClick={refresh}>
@@ -589,17 +730,32 @@ export default function App() {
               </div>
 
               <label className="field">
-                <span>OpenCode Go API key</span>
+                <span>Proveedor</span>
+                <select
+                  value={config.provider}
+                  onChange={(event) => changeProvider(event.target.value as ProviderId)}
+                >
+                  {Object.values(PROVIDER_PRESETS).map((item) => (
+                    <option key={item.id} value={item.id}>{item.label}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="field">
+                <span>{config.apiKeyLabel || provider.apiKeyLabel}</span>
                 <input
                   type="password"
                   value={apiKey}
-                  placeholder={config.hasApiKey ? `Guardada: ${config.maskedApiKey}` : 'oc_...'}
-                  onChange={(event) => setApiKey(event.target.value)}
+                  placeholder={config.hasApiKey ? `Guardada: ${config.maskedApiKey}` : (config.apiKeyPlaceholder || provider.apiKeyPlaceholder)}
+                  onChange={(event) => {
+                    setApiKey(event.target.value)
+                    setConfigDirty(true)
+                  }}
                 />
               </label>
 
               <label className="field">
-                <span>OpenCode base URL</span>
+                <span>Invoke URL o base OpenAI-compatible</span>
                 <input
                   value={config.upstreamBase}
                   onChange={(event) => updateConfig('upstreamBase', event.target.value)}
@@ -647,6 +803,15 @@ export default function App() {
                   list="model-options"
                   value={config.forceModelValue}
                   onChange={(event) => updateConfig('forceModelValue', event.target.value)}
+                />
+              </label>
+
+              <label className="field">
+                <span>Parametros extra del proveedor</span>
+                <textarea
+                  value={config.extraBodyJson}
+                  placeholder='{"chat_template_kwargs":{"thinking":true}}'
+                  onChange={(event) => updateConfig('extraBodyJson', event.target.value)}
                 />
               </label>
             </div>
@@ -697,7 +862,7 @@ export default function App() {
                 <button className="btn" onClick={() => openLocalPath(config.logPath, 'Log')} disabled={!config.logPath || !canOpenNativePath}>
                   <Terminal size={16} /> Abrir log
                 </button>
-                <button className="btn" onClick={testProxy} disabled={testing || !config.hasApiKey}>
+                <button className="btn" onClick={testProxy} disabled={testing || saving || !canTest}>
                   <ShieldCheck size={16} /> Probar conexion
                 </button>
               </div>

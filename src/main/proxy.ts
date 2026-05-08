@@ -4,6 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from 'nod
 import { dirname } from 'node:path'
 
 export interface ProxyConfig {
+  provider: ProviderId
   upstreamBase: string
   apiKey: string
   model: string
@@ -11,6 +12,7 @@ export interface ProxyConfig {
   forceModel: boolean
   forceModelValue: string
   modelMapJson: string
+  extraBodyJson: string
 }
 
 export interface ProxyServerHandle {
@@ -20,6 +22,26 @@ export interface ProxyServerHandle {
   baseUrl: string
   messagesUrl: string
 }
+
+export type ProviderId = 'opencode' | 'nvidia'
+
+export interface ProviderPreset {
+  id: ProviderId
+  label: string
+  apiKeyLabel: string
+  apiKeyPlaceholder: string
+  upstreamBase: string
+  defaultModel: string
+  defaultFastModel: string
+  defaultExtraBodyJson: string
+  docsUrl: string
+  modelIds: string[]
+}
+
+export const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
+export const LEGACY_ZEN_BASE_URL = 'https://opencode.ai/zen/v1'
+export const NVIDIA_NIM_BASE_URL = 'https://integrate.api.nvidia.com/v1'
+export const NVIDIA_NIM_CHAT_COMPLETIONS_URL = `${NVIDIA_NIM_BASE_URL}/chat/completions`
 
 export const GO_MODEL_IDS = [
   'deepseek-v4-flash',
@@ -37,6 +59,102 @@ export const GO_MODEL_IDS = [
   'qwen3.5-plus',
   'qwen3.6-plus'
 ]
+
+export const NVIDIA_MODEL_IDS = [
+  'moonshotai/kimi-k2.6',
+  'moonshotai/kimi-k2-thinking',
+  'moonshotai/kimi-k2-instruct',
+  'deepseek-ai/deepseek-v4-flash',
+  'deepseek-ai/deepseek-v4-pro',
+  'minimaxai/minimax-m2.5',
+  'minimaxai/minimax-m2.7',
+  'openai/gpt-oss-120b',
+  'openai/gpt-oss-20b',
+  'qwen/qwen3-coder-480b-a35b-instruct',
+  'qwen/qwen3-next-80b-a3b-thinking',
+  'qwen/qwen3-5-122b-a10b',
+  'z-ai/glm5.1',
+  'z-ai/glm4.7',
+  'meta/llama-3.1-8b-instruct',
+  'meta/llama-3.3-70b-instruct',
+  'mistralai/devstral-2-123b-instruct-2512',
+  'nvidia/llama-3.3-nemotron-super-49b-v1.5',
+  'nvidia/nemotron-3-super-120b-a12b'
+]
+
+export const PROVIDER_PRESETS: Record<ProviderId, ProviderPreset> = {
+  opencode: {
+    id: 'opencode',
+    label: 'OpenCode Go',
+    apiKeyLabel: 'OpenCode Go API key',
+    apiKeyPlaceholder: 'oc_...',
+    upstreamBase: OPENCODE_GO_BASE_URL,
+    defaultModel: 'kimi-k2.6',
+    defaultFastModel: 'minimax-m2.5',
+    defaultExtraBodyJson: '',
+    docsUrl: 'https://opencode.ai/go',
+    modelIds: GO_MODEL_IDS
+  },
+  nvidia: {
+    id: 'nvidia',
+    label: 'NVIDIA NIM',
+    apiKeyLabel: 'NVIDIA API key',
+    apiKeyPlaceholder: 'nvapi-...',
+    upstreamBase: NVIDIA_NIM_CHAT_COMPLETIONS_URL,
+    defaultModel: 'moonshotai/kimi-k2.6',
+    defaultFastModel: 'deepseek-ai/deepseek-v4-flash',
+    defaultExtraBodyJson: '{\n  "chat_template_kwargs": {\n    "thinking": true\n  }\n}',
+    docsUrl: 'https://docs.api.nvidia.com/nim/reference/llm-apis',
+    modelIds: NVIDIA_MODEL_IDS
+  }
+}
+
+export function normalizeProviderId(value: unknown): ProviderId {
+  return value === 'nvidia' ? 'nvidia' : 'opencode'
+}
+
+export function providerPreset(provider: unknown): ProviderPreset {
+  return PROVIDER_PRESETS[normalizeProviderId(provider)]
+}
+
+export function inferProviderFromBaseUrl(value: string | undefined): ProviderId {
+  const lower = String(value || '').toLowerCase()
+  if (lower.includes('nvidia.com')) return 'nvidia'
+  return 'opencode'
+}
+
+export function normalizeUpstreamBase(provider: unknown, value: string | undefined): string {
+  const preset = providerPreset(provider)
+  let normalized = String(value || preset.upstreamBase).trim().replace(/\/+$/g, '')
+
+  normalized = normalized.replace(/\/messages$/i, '')
+
+  if (normalizeProviderId(provider) === 'opencode' && normalized.startsWith(LEGACY_ZEN_BASE_URL)) {
+    return normalized.replace(LEGACY_ZEN_BASE_URL, OPENCODE_GO_BASE_URL)
+  }
+
+  if (normalizeProviderId(provider) === 'nvidia' && normalized === 'https://integrate.api.nvidia.com') {
+    return NVIDIA_NIM_CHAT_COMPLETIONS_URL
+  }
+
+  if (normalizeProviderId(provider) === 'nvidia' && normalized === NVIDIA_NIM_BASE_URL) {
+    return NVIDIA_NIM_CHAT_COMPLETIONS_URL
+  }
+
+  return normalized || preset.upstreamBase
+}
+
+function upstreamChatCompletionsUrl(config: ProxyConfig): string {
+  const normalized = config.upstreamBase.replace(/\/+$/g, '')
+  if (/\/chat\/completions$/i.test(normalized)) return normalized
+  return `${normalized}/chat/completions`
+}
+
+function upstreamModelsUrl(config: ProxyConfig): string {
+  const normalized = config.upstreamBase.replace(/\/+$/g, '')
+  if (/\/chat\/completions$/i.test(normalized)) return normalized.replace(/\/chat\/completions$/i, '/models')
+  return `${normalized}/models`
+}
 
 interface StartProxyOptions {
   host: string
@@ -136,6 +254,8 @@ export async function startProxyServer(options: StartProxyOptions): Promise<Prox
           host,
           port,
           messagesUrl: `http://${host}:${port}/v1/messages`,
+          provider: config.provider,
+          providerLabel: providerPreset(config.provider).label,
           upstreamBase: config.upstreamBase,
           effectiveModel: effectiveModel(config),
           hasApiKey: Boolean(config.apiKey),
@@ -145,8 +265,9 @@ export async function startProxyServer(options: StartProxyOptions): Promise<Prox
       }
 
       if (req.method === 'GET' && ['/models', '/v1/models'].includes(url.pathname)) {
-        const models = await fetchModels(getConfig())
-        sendJson(res, 200, { object: 'list', data: models.models.map((id) => ({ id, object: 'model', owned_by: 'opencode' })) })
+        const config = getConfig()
+        const models = await fetchModels(config)
+        sendJson(res, 200, { object: 'list', data: models.models.map((id) => ({ id, object: 'model', owned_by: config.provider })) })
         return
       }
 
@@ -219,29 +340,36 @@ export async function startProxyServer(options: StartProxyOptions): Promise<Prox
 }
 
 export async function fetchModels(config: ProxyConfig): Promise<{ ok: boolean; models: string[]; raw: any }> {
-  // 1. Try the standard OpenAI /models endpoint (in case upstream adds it)
+  // 1. Try the standard OpenAI /models endpoint.
   try {
-    const response = await fetch(`${config.upstreamBase}/models`, {
+    const response = await fetch(upstreamModelsUrl(config), {
       headers: upstreamHeaders(config, false)
     })
     const contentType = response.headers.get('content-type') || ''
     if (response.ok && contentType.includes('application/json')) {
       const json = await response.json()
       const models = Array.isArray((json as any)?.data)
-        ? (json as any).data.map((m: any) => String(m.id)).sort()
+        ? dedupeSorted((json as any).data.map((m: any) => String(m.id)).filter(Boolean))
         : []
       if (models.length) return { ok: true, models, raw: json }
     }
-  } catch { /* fall through to scrape */ }
+  } catch { /* fall through to provider fallback */ }
 
-  // 2. Scrape the OpenCode Go page for the model list
-  try {
-    const scraped = await scrapeGoModels()
-    if (scraped.length) return { ok: true, models: scraped, raw: { source: 'scrape', models: scraped } }
-  } catch { /* fall through to hardcoded */ }
+  // 2. OpenCode Go publishes its current bundle on the marketing page.
+  if (config.provider === 'opencode') {
+    try {
+      const scraped = await scrapeGoModels()
+      if (scraped.length) return { ok: true, models: scraped, raw: { source: 'scrape', models: scraped } }
+    } catch { /* fall through to hardcoded */ }
+  }
 
-  // 3. Hardcoded fallback (kept in sync manually as last resort)
-  return { ok: true, models: [...GO_MODEL_IDS], raw: { fallback: true } }
+  // 3. Hardcoded provider fallback (kept in sync manually as last resort).
+  const preset = providerPreset(config.provider)
+  return { ok: true, models: [...preset.modelIds], raw: { fallback: true, provider: preset.id } }
+}
+
+function dedupeSorted(values: string[]): string[] {
+  return Array.from(new Set(values)).sort()
 }
 
 /** Scrape https://opencode.ai/go and extract model IDs from the "Includes ..." text. */
@@ -281,27 +409,51 @@ function displayNameToModelId(name: string): string {
     .replace(/^kimi-k2-5$/, 'kimi-k2.5')
 }
 
-export async function testUpstream(config: ProxyConfig): Promise<{ ok: boolean; model: string; message: string; usage: any }> {
+export async function testUpstream(config: ProxyConfig, logPath?: string): Promise<{ ok: boolean; model: string; message: string; usage: any }> {
+  const logContext = logPath
+    ? createLogContext(createProxyLogger(logPath, 'electron'), `test_${randomUUID().replaceAll('-', '').slice(0, 12)}`, 'POST', '/test')
+    : null
+
   if (!config.apiKey) {
-    const error = new Error('Agrega tu API key de OpenCode Go antes de probar.')
+    const error = new Error(`Agrega tu API key de ${providerPreset(config.provider).label} antes de probar.`)
     ;(error as any).status = 400
+    logContext?.log('test_error', { status: 400, message: error.message })
     throw error
   }
 
   const model = effectiveModel(config)
-  const response = await fetch(`${config.upstreamBase}/chat/completions`, {
+  const request: any = {
+    model,
+    messages: [{ role: 'user', content: 'Responde solo: JaviProxy OK' }],
+    max_tokens: 32,
+    stream: false
+  }
+  applyExtraBodyJson(request, config.extraBodyJson)
+
+  const upstreamUrl = upstreamChatCompletionsUrl(config)
+  logContext?.log('test_openai_request', {
+    summary: summarizeOpenAIRequest(request),
+    upstreamUrl,
+    body: request
+  })
+
+  const response = await fetch(upstreamUrl, {
     method: 'POST',
     headers: upstreamHeaders(config, true),
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'user', content: 'Responde solo: JaviProxy OK' }],
-      max_tokens: 32,
-      stream: false
-    })
+    body: JSON.stringify(request)
   })
 
   const json = await readResponseJson(response)
-  if (!response.ok) throw upstreamError(response.status, json)
+  logContext?.log('test_upstream_response', {
+    status: response.status,
+    contentType: response.headers.get('content-type') || '',
+    body: json
+  })
+  if (!response.ok) {
+    const error = upstreamError(response.status, json)
+    logContext?.log('test_error', { status: response.status, message: error.message })
+    throw error
+  }
 
   return {
     ok: true,
@@ -313,7 +465,7 @@ export async function testUpstream(config: ProxyConfig): Promise<{ ok: boolean; 
 
 async function createMessage(config: ProxyConfig, body: any, logContext?: ProxyLogContext): Promise<any> {
   if (!config.apiKey) {
-    const error = new Error('Missing OpenCode Go API key. Open JaviProxy and save your API key.')
+    const error = new Error(`Missing ${providerPreset(config.provider).label} API key. Open JaviProxy and save your API key.`)
     ;(error as any).status = 401
     throw error
   }
@@ -324,7 +476,7 @@ async function createMessage(config: ProxyConfig, body: any, logContext?: ProxyL
     body: request,
     delivery: 'sync'
   })
-  let response = await fetch(`${config.upstreamBase}/chat/completions`, {
+  let response = await fetch(upstreamChatCompletionsUrl(config), {
     method: 'POST',
     headers: upstreamHeaders(config, true),
     body: JSON.stringify(request)
@@ -352,7 +504,7 @@ async function createMessage(config: ProxyConfig, body: any, logContext?: ProxyL
       delivery: 'sync_retry'
     })
 
-    response = await fetch(`${config.upstreamBase}/chat/completions`, {
+    response = await fetch(upstreamChatCompletionsUrl(config), {
       method: 'POST',
       headers: upstreamHeaders(config, true),
       body: JSON.stringify(retryRequest)
@@ -371,7 +523,7 @@ async function createMessage(config: ProxyConfig, body: any, logContext?: ProxyL
 
 async function createStreamResponse(config: ProxyConfig, body: any, signal: AbortSignal, logContext?: ProxyLogContext): Promise<Response> {
   if (!config.apiKey) {
-    const error = new Error('Missing OpenCode Go API key. Open JaviProxy and save your API key.')
+    const error = new Error(`Missing ${providerPreset(config.provider).label} API key. Open JaviProxy and save your API key.`)
     ;(error as any).status = 401
     throw error
   }
@@ -382,7 +534,7 @@ async function createStreamResponse(config: ProxyConfig, body: any, signal: Abor
     body: request,
     delivery: 'stream'
   })
-  const response = await fetch(`${config.upstreamBase}/chat/completions`, {
+  const response = await fetch(upstreamChatCompletionsUrl(config), {
     method: 'POST',
     headers: { ...upstreamHeaders(config, true), accept: 'text/event-stream' },
     body: JSON.stringify(request),
@@ -454,7 +606,40 @@ function toOpenAIChatCompletion(config: ProxyConfig, body: any, stream: boolean)
     }
   }
 
+  applyExtraBodyJson(request, config.extraBodyJson)
+
   return request
+}
+
+const EXTRA_BODY_PROTECTED_KEYS = new Set([
+  'model',
+  'messages',
+  'stream',
+  'tools',
+  'tool_choice',
+  'parallel_tool_calls'
+])
+
+function applyExtraBodyJson(request: any, extraBodyJson: string): void {
+  if (!extraBodyJson.trim()) return
+  let extraBody: any
+  try {
+    extraBody = JSON.parse(extraBodyJson)
+  } catch {
+    const error = new Error('Parametros extra del proveedor debe ser un objeto JSON valido.')
+    ;(error as any).status = 400
+    throw error
+  }
+  if (!extraBody || typeof extraBody !== 'object' || Array.isArray(extraBody)) {
+    const error = new Error('Parametros extra del proveedor debe ser un objeto JSON valido.')
+    ;(error as any).status = 400
+    throw error
+  }
+
+  for (const [key, value] of Object.entries(extraBody)) {
+    if (EXTRA_BODY_PROTECTED_KEYS.has(key)) continue
+    request[key] = value
+  }
 }
 
 function withExtraSystem(body: any, extraSystem: string): any {
@@ -1113,6 +1298,25 @@ function appendTextOrToolBlocks(blocks: any[], value: string, knownTools: KnownT
   const cleaned = cleanToolFenceText(value)
   if (!cleaned) return 0
 
+  const templateSplit = splitTemplateToolCalls(cleaned, knownTools)
+  if (templateSplit.some((part) => part.type === 'tool_use')) {
+    let offset = 0
+    for (const part of templateSplit) {
+      if (part.type === 'tool_use') {
+        blocks.push({
+          type: 'tool_use',
+          id: part.id || `toolu_${part.name}_${startIndex + offset}`,
+          name: part.name,
+          input: part.input
+        })
+        offset += 1
+      } else if (part.text.trim()) {
+        blocks.push({ type: 'text', text: part.text.trimEnd() })
+      }
+    }
+    return offset
+  }
+
   const looseTagged = parseLooseTaggedToolUse(cleaned)
   if (looseTagged) {
     blocks.push({
@@ -1194,29 +1398,16 @@ function appendTextOrToolBlocks(blocks: any[], value: string, knownTools: KnownT
  */
 function splitTextAndFusedTools(text: string, knownTools: KnownTool[]): Array<{ type: 'text'; text: string } | { type: 'tool_use'; name: string; input: Record<string, unknown> }> {
   const parts: Array<{ type: 'text'; text: string } | { type: 'tool_use'; name: string; input: Record<string, unknown> }> = []
-  const toolNames = knownTools.map((t) => t.name).sort((a, b) => b.length - a.length)
-  const escaped = toolNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-  if (!escaped.length) return [{ type: 'text', text }]
+  const matches = findFusedToolJson(text, knownTools)
+  if (!matches.length) return [{ type: 'text', text }]
 
-  const pattern = new RegExp(`(${escaped.join('|')})(\\{[\\s\\S]*?\\}\\s*(?=\\n|$)|\\[[\\s\\S]*?\\]\\s*(?=\\n|$))`, 'g')
   let lastIndex = 0
-  let match: RegExpExecArray | null
-
-  while ((match = pattern.exec(text)) !== null) {
-    const before = text.slice(lastIndex, match.index)
+  for (const match of matches) {
+    const before = text.slice(lastIndex, match.start)
     if (before) parts.push({ type: 'text', text: before })
 
-    const name = match[1]
-    const jsonPart = match[2].trim()
-    const input = parseJson(jsonPart, null)
-    if (input && typeof input === 'object' && !Array.isArray(input)) {
-      parts.push({ type: 'tool_use', name, input })
-      lastIndex = pattern.lastIndex
-    } else {
-      // Not valid JSON, treat as text
-      parts.push({ type: 'text', text: match[0] })
-      lastIndex = match.index + match[0].length
-    }
+    parts.push({ type: 'tool_use', name: match.name, input: match.input })
+    lastIndex = match.end
   }
 
   const after = text.slice(lastIndex)
@@ -1362,25 +1553,214 @@ function parsePlainToolLines(text: string, knownTools: KnownTool[]): ParsedToolU
  *   "batch_crawl_url_and_answer{\"jobs\": [...]}"
  */
 function parseFusedToolJson(text: string, knownTools: KnownTool[]): ParsedToolUse[] {
-  const results: ParsedToolUse[] = []
+  return findFusedToolJson(text, knownTools).map((match) => ({
+    name: match.name,
+    input: match.input
+  }))
+}
+
+interface FusedToolJsonMatch {
+  start: number
+  end: number
+  name: string
+  input: Record<string, unknown>
+}
+
+function findFusedToolJson(text: string, knownTools: KnownTool[]): FusedToolJsonMatch[] {
+  const results: FusedToolJsonMatch[] = []
   const toolNames = knownTools.map((t) => t.name).sort((a, b) => b.length - a.length)
-  // Build a regex that matches any known tool name followed immediately by a JSON object/array
-  const escaped = toolNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-  if (!escaped.length) return []
+  if (!toolNames.length) return results
 
-  const pattern = new RegExp(`(${escaped.join('|')})(\\{[\\s\\S]*?\\}\\s*(?=\\n|$)|\\[[\\s\\S]*?\\]\\s*(?=\\n|$))`, 'g')
-  let match: RegExpExecArray | null
+  let index = 0
+  while (index < text.length) {
+    const found = findNextToolName(text, toolNames, index)
+    if (!found) break
 
-  while ((match = pattern.exec(text)) !== null) {
-    const name = match[1]
-    const jsonPart = match[2].trim()
-    const input = parseJson(jsonPart, null)
-    if (input && typeof input === 'object' && !Array.isArray(input)) {
-      results.push({ name, input })
+    const jsonStart = findToolJsonStart(text, found.end)
+    if (jsonStart === null) {
+      index = found.start + 1
+      continue
     }
+
+    const jsonEnd = scanBalancedJsonEnd(text, jsonStart)
+    if (jsonEnd === null) {
+      index = found.start + 1
+      continue
+    }
+
+    const input = normalizeToolCallJsonInput(text.slice(jsonStart, jsonEnd))
+    if (!input) {
+      index = found.start + 1
+      continue
+    }
+
+    const end = consumeClosingCallSyntax(text, jsonEnd)
+    results.push({
+      start: found.start,
+      end,
+      name: found.name,
+      input
+    })
+    index = end
   }
 
   return results
+}
+
+function findNextToolName(text: string, toolNames: string[], startAt: number): { start: number; end: number; name: string } | null {
+  let best: { start: number; end: number; name: string } | null = null
+
+  for (const name of toolNames) {
+    let index = text.indexOf(name, startAt)
+    while (index !== -1) {
+      const end = index + name.length
+      if (isToolNameBoundary(text, index, end) && (!best || index < best.start || (index === best.start && name.length > best.name.length))) {
+        best = { start: index, end, name }
+        break
+      }
+      index = text.indexOf(name, index + 1)
+    }
+  }
+
+  return best
+}
+
+function isToolNameBoundary(text: string, start: number, end: number): boolean {
+  const before = start > 0 ? text[start - 1] : ''
+  const after = end < text.length ? text[end] : ''
+  if (before && /[\w.-]/.test(before)) return false
+  if (after && !/[\s:{(\[]/.test(after)) return false
+  return true
+}
+
+function findToolJsonStart(text: string, startAt: number): number | null {
+  let index = startAt
+  while (index < text.length && /\s/.test(text[index])) index += 1
+
+  if (text[index] === ':') {
+    index += 1
+    while (index < text.length && /\s/.test(text[index])) index += 1
+  }
+
+  if (text[index] === '(') {
+    index += 1
+    while (index < text.length && /\s/.test(text[index])) index += 1
+  }
+
+  return text[index] === '{' || text[index] === '[' ? index : null
+}
+
+function scanBalancedJsonEnd(text: string, start: number): number | null {
+  const open = text[start]
+  const close = open === '{' ? '}' : open === '[' ? ']' : ''
+  if (!close) return null
+
+  const stack = [close]
+  let inString = false
+  let escaped = false
+
+  for (let index = start + 1; index < text.length; index += 1) {
+    const char = text[index]
+
+    if (inString) {
+      if (escaped) {
+        escaped = false
+      } else if (char === '\\') {
+        escaped = true
+      } else if (char === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (char === '"') {
+      inString = true
+      continue
+    }
+
+    if (char === '{') {
+      stack.push('}')
+      continue
+    }
+
+    if (char === '[') {
+      stack.push(']')
+      continue
+    }
+
+    if (char === '}' || char === ']') {
+      if (stack[stack.length - 1] !== char) return null
+      stack.pop()
+      if (!stack.length) return index + 1
+    }
+  }
+
+  return null
+}
+
+function normalizeToolCallJsonInput(jsonText: string): Record<string, unknown> | null {
+  const parsed = parseJson(jsonText.trim(), null)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  return parsed
+}
+
+function consumeClosingCallSyntax(text: string, startAt: number): number {
+  let index = startAt
+  while (index < text.length && /\s/.test(text[index])) index += 1
+  if (text[index] === ')') index += 1
+  return index
+}
+
+/**
+ * OpenCode can occasionally surface chat-template tool markers as normal
+ * content instead of OpenAI tool_calls. Split that representation after the
+ * full synthetic response so Codex still receives real Anthropic tool_use
+ * blocks and any surrounding assistant text is preserved.
+ */
+function splitTemplateToolCalls(text: string, knownTools: KnownTool[]): Array<{ type: 'text'; text: string } | ({ type: 'tool_use' } & ParsedToolUse)> {
+  const parts: Array<{ type: 'text'; text: string } | ({ type: 'tool_use' } & ParsedToolUse)> = []
+  const pattern = /<\|tool_call_begin\|>([\s\S]*?)<\|tool_call_argument_begin\|>([\s\S]*?)(?:<\|tool_call_end\|>|(?=<\|tool_call_begin\|>|<\|tool_calls_section_end\|>|$))/g
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = pattern.exec(text)) !== null) {
+    const header = match[1]?.trim() || ''
+    const argsText = stripTemplateToolTokens(match[2] || '')
+    const headerMatch = header.match(/^(?:(?:functions|tools)\.)?([A-Za-z_][\w.-]*)(?::([A-Za-z0-9_.:-]+))?$/)
+    if (!headerMatch) continue
+
+    const name = headerMatch[1]
+    if (!isKnownTool(name, knownTools)) continue
+
+    const before = cleanTemplateToolText(text.slice(lastIndex, match.index))
+    if (before.trim()) parts.push({ type: 'text', text: before })
+
+    parts.push({
+      type: 'tool_use',
+      id: headerMatch[2] ? header : undefined,
+      name,
+      input: parseToolInput(argsText)
+    })
+    lastIndex = pattern.lastIndex
+  }
+
+  const after = cleanTemplateToolText(text.slice(lastIndex))
+  if (after.trim()) parts.push({ type: 'text', text: after })
+
+  return parts.length ? parts : [{ type: 'text', text }]
+}
+
+function stripTemplateToolTokens(value: string): string {
+  return value
+    .replace(/<\|tool_call_end\|>/g, '')
+    .replace(/<\|tool_calls_section_end\|>/g, '')
+    .trim()
+}
+
+function cleanTemplateToolText(value: string): string {
+  return value
+    .replace(/<\|tool_calls_section_begin\|>/g, '')
+    .replace(/<\|tool_calls_section_end\|>/g, '')
 }
 
 function parsePlainToolLine(line: string, knownTools: KnownTool[]): ParsedToolUse | null {
@@ -1803,10 +2183,22 @@ function anthropicError(type: string, message: string): any {
 }
 
 function upstreamError(status: number, json: any): Error {
-  const message = json?.error?.message || json?.message || json?.raw || 'Unknown upstream error'
-  const error = new Error(`OpenCode upstream error (${status}): ${message}`)
+  const message = upstreamErrorMessage(json) || 'Unknown upstream error'
+  const error = new Error(`Upstream provider error (${status}): ${message}`)
   ;(error as any).status = status
   return error
+}
+
+function upstreamErrorMessage(json: any): string {
+  if (!json) return ''
+  if (typeof json === 'string') return json
+  if (typeof json?.error?.message === 'string') return json.error.message
+  if (typeof json?.error === 'string') return json.error
+  if (typeof json?.detail === 'string' && typeof json?.title === 'string') return `${json.title}: ${json.detail}`
+  if (typeof json?.detail === 'string') return json.detail
+  if (typeof json?.message === 'string') return json.message
+  if (typeof json?.raw === 'string') return json.raw
+  return ''
 }
 
 function parseJson(value: string, fallback: any): any {

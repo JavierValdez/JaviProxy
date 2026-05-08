@@ -1,12 +1,18 @@
 /// <reference types="vite/client" />
 
 interface JaviProxyConfig {
+  provider: 'opencode' | 'nvidia'
+  providerLabel: string
+  providerDocsUrl: string
+  apiKeyLabel: string
+  apiKeyPlaceholder: string
   upstreamBase: string
   model: string
   fastModel: string
   forceModel: boolean
   forceModelValue: string
   modelMapJson: string
+  extraBodyJson: string
   effectiveModel: string
   hasApiKey: boolean
   maskedApiKey: string
@@ -26,6 +32,8 @@ interface JaviProxyStatus {
   port: number
   baseUrl: string
   messagesUrl: string
+  provider: 'opencode' | 'nvidia'
+  providerLabel: string
   upstreamBase: string
   effectiveModel: string
   hasApiKey: boolean
