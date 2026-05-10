@@ -123,42 +123,51 @@ function providerApiKeyEnv(provider: ProviderId): string {
   if (provider === 'nvidia') {
     return normalizeApiKeyInput(process.env.NVIDIA_API_KEY || process.env.NVIDIA_NIM_API_KEY || process.env.NVAPI_KEY || '')
   }
+  if (provider === 'openrouter') {
+    return normalizeApiKeyInput(process.env.OPENROUTER_API_KEY || '')
+  }
   return normalizeApiKeyInput(process.env.OPENCODE_API_KEY || process.env.OPENCODE_GO_API_KEY || '')
 }
 
 function providerBaseUrlEnv(provider: ProviderId): string {
   if (process.env.JAVIPROXY_BASE_URL) return process.env.JAVIPROXY_BASE_URL
   if (provider === 'nvidia') return process.env.NVIDIA_BASE_URL || process.env.NVIDIA_NIM_BASE_URL || ''
+  if (provider === 'openrouter') return process.env.OPENROUTER_BASE_URL || ''
   return process.env.OPENCODE_BASE_URL || ''
 }
 
 function providerModelEnv(provider: ProviderId): string {
   if (process.env.JAVIPROXY_MODEL) return process.env.JAVIPROXY_MODEL
   if (provider === 'nvidia') return process.env.NVIDIA_MODEL || process.env.NVIDIA_NIM_MODEL || ''
+  if (provider === 'openrouter') return process.env.OPENROUTER_MODEL || ''
   return process.env.OPENCODE_GO_MODEL || ''
 }
 
 function providerFastModelEnv(provider: ProviderId): string {
   if (process.env.JAVIPROXY_FAST_MODEL) return process.env.JAVIPROXY_FAST_MODEL
   if (provider === 'nvidia') return process.env.NVIDIA_FAST_MODEL || process.env.NVIDIA_NIM_FAST_MODEL || ''
+  if (provider === 'openrouter') return process.env.OPENROUTER_FAST_MODEL || ''
   return process.env.OPENCODE_GO_FAST_MODEL || ''
 }
 
 function providerForceModelEnv(provider: ProviderId): string {
   if (process.env.JAVIPROXY_FORCE_MODEL) return process.env.JAVIPROXY_FORCE_MODEL
   if (provider === 'nvidia') return process.env.NVIDIA_FORCE_MODEL || process.env.NVIDIA_NIM_FORCE_MODEL || ''
+  if (provider === 'openrouter') return process.env.OPENROUTER_FORCE_MODEL || ''
   return process.env.OPENCODE_FORCE_MODEL || ''
 }
 
 function providerModelMapEnv(provider: ProviderId): string | undefined {
   if (process.env.JAVIPROXY_MODEL_MAP_JSON !== undefined) return process.env.JAVIPROXY_MODEL_MAP_JSON
   if (provider === 'nvidia') return process.env.NVIDIA_MODEL_MAP_JSON
+  if (provider === 'openrouter') return process.env.OPENROUTER_MODEL_MAP_JSON
   return process.env.OPENCODE_MODEL_MAP_JSON
 }
 
 function providerExtraBodyEnv(provider: ProviderId): string | undefined {
   if (process.env.JAVIPROXY_EXTRA_BODY_JSON !== undefined) return process.env.JAVIPROXY_EXTRA_BODY_JSON
   if (provider === 'nvidia') return process.env.NVIDIA_EXTRA_BODY_JSON || process.env.NVIDIA_NIM_EXTRA_BODY_JSON
+  if (provider === 'openrouter') return process.env.OPENROUTER_EXTRA_BODY_JSON
   return process.env.OPENCODE_EXTRA_BODY_JSON
 }
 
@@ -245,7 +254,7 @@ function saveConfig(input: Partial<ProxyConfig> & { apiKey?: string }): ProxyCon
 
   let updatedStore = updateStoredProviderSettings(current, provider, nextSettings)
   const legacy = legacyProvider(current)
-  if (!current.provider && legacy !== provider && !updatedStore.providerSettings?.[legacy]) {
+  if (legacy !== provider && !updatedStore.providerSettings?.[legacy]) {
     updatedStore = updateStoredProviderSettings(updatedStore, legacy, getStoredProviderSettings(current, legacy))
   }
 

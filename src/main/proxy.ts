@@ -23,7 +23,7 @@ export interface ProxyServerHandle {
   messagesUrl: string
 }
 
-export type ProviderId = 'opencode' | 'nvidia'
+export type ProviderId = 'opencode' | 'nvidia' | 'openrouter'
 
 export interface ProviderPreset {
   id: ProviderId
@@ -42,6 +42,7 @@ export const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
 export const LEGACY_ZEN_BASE_URL = 'https://opencode.ai/zen/v1'
 export const NVIDIA_NIM_BASE_URL = 'https://integrate.api.nvidia.com/v1'
 export const NVIDIA_NIM_CHAT_COMPLETIONS_URL = `${NVIDIA_NIM_BASE_URL}/chat/completions`
+export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 
 export const GO_MODEL_IDS = [
   'deepseek-v4-flash',
@@ -82,6 +83,20 @@ export const NVIDIA_MODEL_IDS = [
   'nvidia/nemotron-3-super-120b-a12b'
 ]
 
+export const OPENROUTER_MODEL_IDS = [
+  'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash',
+  'deepseek/deepseek-chat',
+  'deepseek/deepseek-reasoner',
+  'google/gemini-2.5-pro',
+  'google/gemini-2.5-flash',
+  'anthropic/claude-sonnet-4',
+  'anthropic/claude-haiku-4.5',
+  'moonshotai/kimi-k2.6',
+  'qwen/qwen3-coder-480b-a35b-instruct',
+  'meta-llama/llama-4-maverick'
+]
+
 export const PROVIDER_PRESETS: Record<ProviderId, ProviderPreset> = {
   opencode: {
     id: 'opencode',
@@ -106,11 +121,25 @@ export const PROVIDER_PRESETS: Record<ProviderId, ProviderPreset> = {
     defaultExtraBodyJson: '{\n  "chat_template_kwargs": {\n    "thinking": true\n  }\n}',
     docsUrl: 'https://docs.api.nvidia.com/nim/reference/llm-apis',
     modelIds: NVIDIA_MODEL_IDS
+  },
+  openrouter: {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    apiKeyLabel: 'OpenRouter API key',
+    apiKeyPlaceholder: 'sk-or-v1-...',
+    upstreamBase: OPENROUTER_BASE_URL,
+    defaultModel: 'deepseek/deepseek-v4-flash',
+    defaultFastModel: 'deepseek/deepseek-v4-flash',
+    defaultExtraBodyJson: '',
+    docsUrl: 'https://openrouter.ai/docs',
+    modelIds: OPENROUTER_MODEL_IDS
   }
 }
 
 export function normalizeProviderId(value: unknown): ProviderId {
-  return value === 'nvidia' ? 'nvidia' : 'opencode'
+  if (value === 'nvidia') return 'nvidia'
+  if (value === 'openrouter') return 'openrouter'
+  return 'opencode'
 }
 
 export function providerPreset(provider: unknown): ProviderPreset {
@@ -120,6 +149,7 @@ export function providerPreset(provider: unknown): ProviderPreset {
 export function inferProviderFromBaseUrl(value: string | undefined): ProviderId {
   const lower = String(value || '').toLowerCase()
   if (lower.includes('nvidia.com')) return 'nvidia'
+  if (lower.includes('openrouter.ai')) return 'openrouter'
   return 'opencode'
 }
 
@@ -2135,7 +2165,11 @@ function truncateLogString(value: string, maxLength = 4000): string {
 function upstreamHeaders(config: ProxyConfig, hasBody: boolean): Record<string, string> {
   return {
     ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}),
-    ...(hasBody ? { 'content-type': 'application/json' } : {})
+    ...(hasBody ? { 'content-type': 'application/json' } : {}),
+    ...(config.provider === 'openrouter' ? {
+      'http-referer': 'https://github.com/JavierValdez/JaviProxy',
+      'x-openrouter-title': 'JaviProxy'
+    } : {})
   }
 }
 

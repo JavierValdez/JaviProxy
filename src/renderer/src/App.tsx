@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import appIcon from './assets/icon.png'
 
-type ProviderId = 'opencode' | 'nvidia'
+type ProviderId = 'opencode' | 'nvidia' | 'openrouter'
 
 interface Toast {
   id: number
@@ -98,6 +98,30 @@ const PROVIDER_PRESETS: Record<ProviderId, ProviderUiPreset> = {
       'mistralai/devstral-2-123b-instruct-2512',
       'nvidia/llama-3.3-nemotron-super-49b-v1.5',
       'nvidia/nemotron-3-super-120b-a12b'
+    ]
+  },
+  openrouter: {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    apiKeyLabel: 'OpenRouter API key',
+    apiKeyPlaceholder: 'sk-or-v1-...',
+    upstreamBase: 'https://openrouter.ai/api/v1',
+    defaultModel: 'deepseek/deepseek-v4-flash',
+    defaultFastModel: 'deepseek/deepseek-v4-flash',
+    defaultExtraBodyJson: '',
+    docsUrl: 'https://openrouter.ai/docs',
+    modelIds: [
+      'deepseek/deepseek-v4-pro',
+      'deepseek/deepseek-v4-flash',
+      'deepseek/deepseek-chat',
+      'deepseek/deepseek-reasoner',
+      'google/gemini-2.5-pro',
+      'google/gemini-2.5-flash',
+      'anthropic/claude-sonnet-4',
+      'anthropic/claude-haiku-4.5',
+      'moonshotai/kimi-k2.6',
+      'qwen/qwen3-coder-480b-a35b-instruct',
+      'meta-llama/llama-4-maverick'
     ]
   }
 }
@@ -561,28 +585,52 @@ export default function App() {
     setConfigDirty(true)
   }
 
-  const changeProvider = (provider: ProviderId) => {
-    const preset = PROVIDER_PRESETS[provider] || DEFAULT_PROVIDER
-    setConfig((current) => ({
-      ...current,
-      provider: preset.id,
-      providerLabel: preset.label,
-      providerDocsUrl: preset.docsUrl,
-      apiKeyLabel: preset.apiKeyLabel,
-      apiKeyPlaceholder: preset.apiKeyPlaceholder,
-      upstreamBase: preset.upstreamBase,
-      model: preset.defaultModel,
-      fastModel: preset.defaultFastModel,
-      forceModelValue: preset.defaultModel,
-      extraBodyJson: preset.defaultExtraBodyJson,
-      effectiveModel: preset.defaultModel,
-      hasApiKey: false,
-      maskedApiKey: ''
-    }))
-    setApiKey('')
-    setModels(preset.modelIds)
-    setModelsProvider(provider)
-    setConfigDirty(true)
+  const changeProvider = async (provider: ProviderId) => {
+    try {
+      // Switch provider in store and load its saved config
+      await javiProxyApi().setConfig({ provider })
+      const nextConfig = await javiProxyApi().getConfig()
+      setConfig(nextConfig)
+      setConfigDirty(false)
+      setApiKey('')
+      // Refresh model list for new provider
+      try {
+        const result = await javiProxyApi().listModels()
+        if (Array.isArray(result.models) && result.models.length) {
+          setModels(result.models)
+          setModelsProvider(provider)
+        } else {
+          setModels(PROVIDER_PRESETS[provider]?.modelIds || [])
+          setModelsProvider(provider)
+        }
+      } catch {
+        setModels(PROVIDER_PRESETS[provider]?.modelIds || [])
+        setModelsProvider(provider)
+      }
+    } catch {
+      // Fallback: if store switch fails, use preset defaults
+      const preset = PROVIDER_PRESETS[provider] || DEFAULT_PROVIDER
+      setConfig((current) => ({
+        ...current,
+        provider: preset.id,
+        providerLabel: preset.label,
+        providerDocsUrl: preset.docsUrl,
+        apiKeyLabel: preset.apiKeyLabel,
+        apiKeyPlaceholder: preset.apiKeyPlaceholder,
+        upstreamBase: preset.upstreamBase,
+        model: preset.defaultModel,
+        fastModel: preset.defaultFastModel,
+        forceModelValue: preset.defaultModel,
+        extraBodyJson: preset.defaultExtraBodyJson,
+        effectiveModel: preset.defaultModel,
+        hasApiKey: false,
+        maskedApiKey: ''
+      }))
+      setApiKey('')
+      setModels(preset.modelIds)
+      setModelsProvider(provider)
+      setConfigDirty(true)
+    }
   }
 
   const isReady = Boolean(status?.running && config.hasApiKey && !status?.error)
