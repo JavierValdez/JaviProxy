@@ -791,6 +791,7 @@ export default function App() {
 
               <label className="field">
                 <span>{config.apiKeyLabel || provider.apiKeyLabel}</span>
+                <div className="field-with-copy">
                 <input
                   type="password"
                   value={apiKey}
@@ -800,6 +801,24 @@ export default function App() {
                     setConfigDirty(true)
                   }}
                 />
+                {config.hasApiKey && (
+                  <button
+                    className="icon-btn"
+                    title="Copiar API key"
+                    onClick={async () => {
+                      try {
+                        const key = await javiProxyApi().getApiKey()
+                        await navigator.clipboard.writeText(key)
+                        toast('API key copiada', 'success')
+                      } catch {
+                        toast('No se pudo copiar la API key', 'error')
+                      }
+                    }}
+                  >
+                    <Clipboard size={15} />
+                  </button>
+                )}
+                </div>
               </label>
 
               <label className="field">

@@ -628,6 +628,7 @@ ipcMain.handle('app:newWindow', async (event) => {
   return true
 })
 
+ipcMain.handle('config:getApiKey', async () => getStoredApiKey(readStore(), getConfig().provider))
 ipcMain.handle('config:get', async () => publicConfig())
 ipcMain.handle('config:set', async (_event, input) => {
   saveConfig(input || {})

@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 const javiProxyAPI = {
   getConfig: () => ipcRenderer.invoke('config:get'),
+  getApiKey: () => ipcRenderer.invoke('config:getApiKey'),
   setConfig: (config: any) => ipcRenderer.invoke('config:set', config),
   getStatus: () => ipcRenderer.invoke('proxy:status'),
   startProxy: () => ipcRenderer.invoke('proxy:start'),

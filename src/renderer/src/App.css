@@ -337,6 +337,17 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   margin-bottom: 12px;
 }
 
+.field-with-copy {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.field-with-copy input {
+  flex: 1;
+  min-width: 0;
+}
+
 .field span,
 .checkline span {
   color: var(--text2);
