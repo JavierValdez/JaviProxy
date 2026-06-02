@@ -8,13 +8,18 @@ on:
 permissions:
   contents: write
 
+env:
+  GCP_PROJECT_ID: artictools-e5538
+  GCS_BUCKET: artictools-releases
+  GCS_RELEASES_PREFIX: javiproxy/releases
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Publish ${{ matrix.platform.name }}
+  build:
+    name: Build ${{ matrix.platform.name }}
     runs-on: ${{ matrix.platform.os }}
     timeout-minutes: 60
     strategy:
@@ -43,10 +48,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build and publish
+      - name: Build artifacts
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -n "${{ secrets.CSC_LINK }}" ]; then
             export CSC_LINK='${{ secrets.CSC_LINK }}'
@@ -64,4 +67,222 @@ jobs:
             export APPLE_TEAM_ID='${{ secrets.APPLE_TEAM_ID }}'
           fi
 
-          npm run release -- ${{ matrix.platform.args }}
+          npm run build
+          npx electron-builder --publish never ${{ matrix.platform.args }}
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform.name }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.exe
+            dist/*.blockmap
+            dist/latest*.yml
+          if-no-files-found: error
+
+  publish:
+    name: Publish Cloud Storage release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          files: release-assets/**/*
+          fail_on_unmatched_files: true
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_RELEASES_SERVICE_ACCOUNT_KEY }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Publish release to Cloud Storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          version_dir="${GITHUB_REF_NAME}"
+          destination="gs://${GCS_BUCKET}/${GCS_RELEASES_PREFIX}"
+          version_destination="${destination}/${version_dir}/"
+          installer_assets=(
+            release-assets/*.dmg
+            release-assets/*.zip
+            release-assets/*.exe
+            release-assets/*.blockmap
+          )
+          metadata_assets=(release-assets/latest*.yml)
+
+          if [ "${#installer_assets[@]}" -eq 0 ]; then
+            echo "No installer artifacts were found."
+            exit 1
+          fi
+
+          if [ "${#metadata_assets[@]}" -eq 0 ]; then
+            echo "No update metadata files were found."
+            exit 1
+          fi
+
+          VERSION_DIR="${version_dir}" node - <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+
+          const versionDir = process.env.VERSION_DIR;
+          const metadataDir = 'release-assets';
+          const metadataFiles = fs
+            .readdirSync(metadataDir)
+            .filter((file) => /^latest.*\.yml$/.test(file));
+
+          for (const file of metadataFiles) {
+            const filePath = path.join(metadataDir, file);
+            const nextContent = fs
+              .readFileSync(filePath, 'utf8')
+              .replace(/^(\s*(?:- )?(?:url|path):\s*)(?!https?:\/\/|\/)(\S.*)$/gm, (match, prefix, value) => {
+                const trimmedValue = value.trim();
+                return trimmedValue.startsWith(`${versionDir}/`)
+                  ? match
+                  : `${prefix}${versionDir}/${trimmedValue}`;
+              });
+
+            fs.writeFileSync(filePath, nextContent);
+          }
+          NODE
+
+          gcloud storage cp \
+            --canned-acl=publicRead \
+            --cache-control="public,max-age=31536000,immutable" \
+            "${installer_assets[@]}" \
+            "${version_destination}"
+
+          gcloud storage cp \
+            --canned-acl=publicRead \
+            --cache-control="no-cache" \
+            "${metadata_assets[@]}" \
+            "${destination}/"
+
+      - name: Verify published metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_url="https://storage.googleapis.com/${GCS_BUCKET}/${GCS_RELEASES_PREFIX}"
+
+          for metadata in latest.yml latest-mac.yml; do
+            curl --fail --silent --show-error "${base_url}/${metadata}" --output "${metadata}"
+
+            mapfile -t asset_paths < <(node - "${metadata}" <<'NODE'
+          const fs = require('node:fs');
+          const metadataPath = process.argv[2];
+          const content = fs.readFileSync(metadataPath, 'utf8');
+          const paths = new Set();
+
+          for (const match of content.matchAll(/^\s*(?:- )?(?:url|path):\s*(.+)$/gm)) {
+            const value = match[1].trim().replace(/^['"]|['"]$/g, '');
+            if (value && !/^https?:\/\//i.test(value)) {
+              paths.add(value);
+            }
+          }
+
+          process.stdout.write([...paths].join('\n'));
+          NODE
+            )
+
+            for asset_path in "${asset_paths[@]}"; do
+              curl --fail --silent --show-error --head "${base_url}/${asset_path}" >/dev/null
+            done
+          done
+
+      - name: Keep only five Cloud Storage releases
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          destination="gs://${GCS_BUCKET}/${GCS_RELEASES_PREFIX}"
+          version_list="$(mktemp)"
+          delete_list="$(mktemp)"
+
+          gcloud storage ls "${destination}/" > "${version_list}" || true
+
+          node - "${version_list}" > "${delete_list}" <<'NODE'
+          const fs = require('node:fs');
+          const listPath = process.argv[2];
+          const versions = new Set();
+
+          for (const line of fs.readFileSync(listPath, 'utf8').split(/\r?\n/)) {
+            const match = line.match(/\/(v\d+\.\d+\.\d+(?:[-+][^/]+)?)\/$/);
+            if (match) {
+              versions.add(match[1]);
+            }
+          }
+
+          function parseVersion(value) {
+            const match = value.match(/^v(\d+)\.(\d+)\.(\d+)(?:-([^+]+))?/);
+            if (!match) {
+              return null;
+            }
+
+            return {
+              value,
+              major: Number(match[1]),
+              minor: Number(match[2]),
+              patch: Number(match[3]),
+              prerelease: match[4] || '',
+            };
+          }
+
+          function compareVersions(left, right) {
+            for (const key of ['major', 'minor', 'patch']) {
+              if (left[key] !== right[key]) {
+                return right[key] - left[key];
+              }
+            }
+
+            if (!left.prerelease && right.prerelease) {
+              return -1;
+            }
+
+            if (left.prerelease && !right.prerelease) {
+              return 1;
+            }
+
+            return right.prerelease.localeCompare(left.prerelease);
+          }
+
+          const sortedVersions = [...versions]
+            .map(parseVersion)
+            .filter(Boolean)
+            .sort(compareVersions);
+
+          process.stdout.write(sortedVersions.slice(5).map((version) => version.value).join('\n'));
+          NODE
+
+          while read -r version_dir; do
+            if [ -n "${version_dir}" ]; then
+              gcloud storage rm --recursive "${destination}/${version_dir}/"
+            fi
+          done < "${delete_list}"
+
+          legacy_root_assets=()
+          while IFS= read -r asset; do legacy_root_assets+=("${asset}"); done < <(gcloud storage ls "${destination}/JaviProxy-*" 2>/dev/null || true)
+          while IFS= read -r asset; do legacy_root_assets+=("${asset}"); done < <(gcloud storage ls "${destination}/JaviProxy Setup*" 2>/dev/null || true)
+
+          if [ "${#legacy_root_assets[@]}" -gt 0 ]; then
+            gcloud storage rm "${legacy_root_assets[@]}"
+          fi

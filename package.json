@@ -14,7 +14,7 @@
     "dist": "npm run build && electron-builder",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:win": "npm run build && electron-builder --win",
-    "release": "npm run build && electron-builder --publish always"
+    "release": "npm run build"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.0",
@@ -41,11 +41,13 @@
     "productName": "JaviProxy",
     "mac": {
       "target": "dmg",
-      "icon": "resources/icon.icns"
+      "icon": "resources/icon.icns",
+      "artifactName": "${productName}-Mac-${version}-Installer.${ext}"
     },
     "win": {
       "target": "nsis",
-      "icon": "resources/icon.ico"
+      "icon": "resources/icon.ico",
+      "artifactName": "${productName}-Windows-${version}-Setup.${ext}"
     },
     "nsis": {
       "oneClick": true,
@@ -87,12 +89,12 @@
     "directories": {
       "output": "dist"
     },
-    "publish": {
-      "provider": "github",
-      "owner": "JavierValdez",
-      "repo": "JaviProxy",
-      "releaseType": "release"
-    }
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://storage.googleapis.com/artictools-releases/javiproxy/releases"
+      }
+    ]
   },
   "engines": {
     "node": ">=20"

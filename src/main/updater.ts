@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import { get } from 'node:https'
+import path from 'node:path'
 
 type UpdateStage =
   | 'idle'
@@ -29,24 +29,31 @@ export interface AppUpdateState {
   error: string | null
 }
 
-interface GithubAsset {
+interface UpdateDownloadAsset {
   name: string
-  browser_download_url: string
+  url: string
+  size: number | null
 }
 
-interface GithubRelease {
-  tag_name: string
-  name?: string
-  published_at?: string
-  body?: string
-  assets?: GithubAsset[]
+interface ReleaseMetadata {
+  version: string
+  releaseDate: string | null
+  files: UpdateDownloadAsset[]
 }
 
-const UPDATE_OWNER = process.env.JAVIPROXY_UPDATE_OWNER || 'JavierValdez'
-const UPDATE_REPO = process.env.JAVIPROXY_UPDATE_REPO || 'JaviProxy'
-const UPDATE_TOKEN = (process.env.JAVIPROXY_UPDATE_TOKEN || '').trim()
-const LATEST_RELEASE_API = `https://api.github.com/repos/${UPDATE_OWNER}/${UPDATE_REPO}/releases/latest`
-const RELEASES_PAGE = `https://github.com/${UPDATE_OWNER}/${UPDATE_REPO}/releases`
+interface LatestReleaseInfo {
+  version: string
+  name: string
+  releaseDate: string | null
+  releaseNotes: string | null
+  downloadAsset: UpdateDownloadAsset | null
+}
+
+const RELEASES_BASE_URL = (
+  process.env.JAVIPROXY_RELEASES_BASE_URL ||
+  'https://storage.googleapis.com/artictools-releases/javiproxy/releases'
+).replace(/\/+$/, '')
+const RELEASES_PAGE = RELEASES_BASE_URL
 
 const updateState: AppUpdateState = {
   stage: 'idle',
@@ -133,60 +140,125 @@ function compareVersions(a: string, b: string): number {
   return 0
 }
 
-function pickDownloadUrl(release: GithubRelease): string | null {
-  const platform = process.platform
-  const assets = release.assets || []
-  const suffix = platform === 'darwin' ? '.dmg' : platform === 'win32' ? '.exe' : null
-  if (!suffix) return RELEASES_PAGE
-
-  const asset = assets.find((a) => a.name.toLowerCase().endsWith(suffix))
-  return asset?.browser_download_url || RELEASES_PAGE
+function parseYamlValue(raw: string): string {
+  const value = raw.trim()
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1)
+  }
+  return value
 }
 
-async function fetchLatestRelease(): Promise<GithubRelease> {
-  return new Promise((resolve, reject) => {
-    const headers: Record<string, string> = {
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'JaviProxy-Updater'
-    }
-    if (UPDATE_TOKEN) {
-      headers.Authorization = `Bearer ${UPDATE_TOKEN}`
+function resolveReleaseUrl(value: string): string {
+  const assetPath = parseYamlValue(value)
+  if (/^https?:\/\//i.test(assetPath)) return assetPath
+  return `${RELEASES_BASE_URL}/${assetPath.replace(/^\/+/, '')}`
+}
+
+function getReleaseAssetName(value: string): string {
+  const assetPath = parseYamlValue(value).split('?')[0]
+  try {
+    const parsed = new URL(assetPath)
+    return path.basename(decodeURIComponent(parsed.pathname))
+  } catch {
+    return path.basename(assetPath)
+  }
+}
+
+function parseReleaseMetadata(raw: string): ReleaseMetadata {
+  const versionMatch = raw.match(/^version:\s*(.+)$/m)
+  if (!versionMatch) {
+    throw new Error('Metadata de actualizacion invalida: falta version.')
+  }
+
+  const releaseDateMatch = raw.match(/^releaseDate:\s*(.+)$/m)
+  const files: UpdateDownloadAsset[] = []
+  let currentFile: UpdateDownloadAsset | null = null
+
+  for (const line of raw.split(/\r?\n/)) {
+    const urlMatch = line.match(/^\s*(?:-\s*)?url:\s*(.+)$/)
+    if (urlMatch) {
+      const assetPath = parseYamlValue(urlMatch[1])
+      currentFile = {
+        name: getReleaseAssetName(assetPath),
+        url: resolveReleaseUrl(assetPath),
+        size: null
+      }
+      files.push(currentFile)
+      continue
     }
 
-    const req = get(
-      LATEST_RELEASE_API,
-      { headers },
-      (res) => {
-        const chunks: Buffer[] = []
-        res.on('data', (chunk: Buffer) => { chunks.push(chunk) })
-        res.on('error', (err) => reject(err))
-        res.on('end', () => {
-          const raw = Buffer.concat(chunks).toString('utf-8')
-          const code = res.statusCode || 0
-          if (code < 200 || code >= 300) {
-            if (code === 404) {
-              reject(new Error('No se encontro ningun release publicado'))
-              return
-            }
-            reject(new Error(`GitHub API error ${code}: ${raw.slice(0, 200)}`))
-            return
-          }
-          try {
-            const parsed = JSON.parse(raw) as GithubRelease
-            if (!parsed?.tag_name) {
-              reject(new Error('Respuesta de release invalida'))
-              return
-            }
-            resolve(parsed)
-          } catch {
-            reject(new Error('No se pudo parsear la respuesta de GitHub Releases'))
-          }
-        })
-      }
-    )
-    req.on('error', (err) => reject(err))
-    req.end()
+    const sizeMatch = line.match(/^\s*size:\s*(\d+)\s*$/)
+    if (sizeMatch && currentFile) {
+      currentFile.size = Number(sizeMatch[1])
+    }
+  }
+
+  const pathMatch = raw.match(/^path:\s*(.+)$/m)
+  if (files.length === 0 && pathMatch) {
+    const assetPath = parseYamlValue(pathMatch[1])
+    files.push({
+      name: getReleaseAssetName(assetPath),
+      url: resolveReleaseUrl(assetPath),
+      size: null
+    })
+  }
+
+  return {
+    version: parseYamlValue(versionMatch[1]),
+    releaseDate: releaseDateMatch ? parseYamlValue(releaseDateMatch[1]) : null,
+    files
+  }
+}
+
+function getMetadataFileName(): string | null {
+  if (process.platform === 'darwin') return 'latest-mac.yml'
+  if (process.platform === 'win32') return 'latest.yml'
+  return null
+}
+
+function pickDownloadAsset(release: ReleaseMetadata): UpdateDownloadAsset | null {
+  const platformPriority = process.platform === 'darwin'
+    ? ['.dmg', '.zip']
+    : process.platform === 'win32'
+      ? ['.exe', '.msi', '.zip']
+      : []
+
+  for (const ext of platformPriority) {
+    const found = release.files.find((asset) => asset.name.toLowerCase().endsWith(ext))
+    if (found) return found
+  }
+
+  return release.files[0] ?? null
+}
+
+async function fetchLatestRelease(): Promise<LatestReleaseInfo> {
+  const metadataFileName = getMetadataFileName()
+  if (!metadataFileName) {
+    throw new Error('No hay actualizaciones configuradas para esta plataforma.')
+  }
+
+  const response = await fetch(`${RELEASES_BASE_URL}/${metadataFileName}`, {
+    headers: {
+      Accept: 'text/yaml,text/plain',
+      'User-Agent': `JaviProxy/${app.getVersion()}`
+    },
+    redirect: 'follow'
   })
+
+  if (!response.ok) {
+    throw new Error(`El bucket de releases respondio con estado ${response.status}.`)
+  }
+
+  const metadata = parseReleaseMetadata(await response.text())
+  const version = normalizeVersion(metadata.version)
+
+  return {
+    version,
+    name: `JaviProxy ${version}`,
+    releaseDate: metadata.releaseDate,
+    releaseNotes: null,
+    downloadAsset: pickDownloadAsset(metadata)
+  }
 }
 
 async function checkForUpdates(): Promise<AppUpdateState> {
@@ -200,10 +272,26 @@ async function checkForUpdates(): Promise<AppUpdateState> {
 
   checkInFlight = (async () => {
     const latest = await fetchLatestRelease()
-    const latestVersion = normalizeVersion(latest.tag_name)
+    const latestVersion = normalizeVersion(latest.version)
     const currentVersion = app.getVersion()
     const hasUpdate = compareVersions(latestVersion, currentVersion) > 0
-    const downloadUrl = pickDownloadUrl(latest)
+    const downloadAsset = latest.downloadAsset
+
+    if (hasUpdate && !downloadAsset) {
+      patchState({
+        stage: 'error',
+        mode: 'manual',
+        latestVersion,
+        downloadedVersion: null,
+        progressPercent: null,
+        releaseName: latest.name,
+        releaseDate: latest.releaseDate,
+        releaseNotes: latest.releaseNotes,
+        downloadUrl: RELEASES_PAGE,
+        error: 'No se encontro un instalador compatible en el metadata de actualizacion.'
+      })
+      return
+    }
 
     patchState({
       stage: hasUpdate ? 'available' : 'not-available',
@@ -211,10 +299,10 @@ async function checkForUpdates(): Promise<AppUpdateState> {
       latestVersion,
       downloadedVersion: null,
       progressPercent: null,
-      releaseName: latest.name || null,
-      releaseDate: latest.published_at || null,
-      releaseNotes: latest.body || null,
-      downloadUrl,
+      releaseName: latest.name,
+      releaseDate: latest.releaseDate,
+      releaseNotes: latest.releaseNotes,
+      downloadUrl: hasUpdate ? downloadAsset?.url || null : null,
       error: null
     })
   })()
@@ -274,6 +362,11 @@ export function setupAppUpdater(window: BrowserWindow): void {
 
   if (!app.isPackaged) {
     markUnsupported('Actualizaciones automaticas disponibles solo en la app empaquetada.')
+    return
+  }
+
+  if (!getMetadataFileName()) {
+    markUnsupported('Actualizaciones disponibles solo para macOS y Windows.')
     return
   }
 
