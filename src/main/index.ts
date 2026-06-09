@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, session, shell } from 'electron'
 app.name = 'JaviProxy'
 
 import type { IpcMainInvokeEvent, MenuItemConstructorOptions, OpenDialogOptions } from 'electron'
@@ -13,7 +13,8 @@ import {
   normalizeUpstreamBase,
   providerPreset,
   startProxyServer,
-  testUpstream
+  testUpstream,
+  upstreamTlsCompatibilityHostnames
 } from './proxy'
 import type { ProviderId, ProxyConfig, ProxyServerHandle } from './proxy'
 import { setupAppUpdater } from './updater'
@@ -336,6 +337,49 @@ function statusPayload() {
   }
 }
 
+function windowsTlsCompatibilityEnabled(): boolean {
+  if (process.platform !== 'win32') return false
+  const value = String(process.env.JAVIPROXY_WINDOWS_TLS_COMPAT || '').trim().toLowerCase()
+  return !['0', 'false', 'no', 'off'].includes(value)
+}
+
+function isRevocationAvailabilityError(result: string, errorCode: number): boolean {
+  const normalized = String(result || '').toUpperCase()
+  if (normalized.includes('REVOKED')) return false
+  return errorCode === -204
+    || errorCode === -205
+    || normalized.includes('NO_REVOCATION')
+    || normalized.includes('UNABLE_TO_CHECK_REVOCATION')
+    || normalized.includes('REVOCATION_CHECK')
+}
+
+function setupWindowsTlsCompatibility(): void {
+  if (!windowsTlsCompatibilityEnabled()) return
+
+  session.defaultSession.setCertificateVerifyProc((request, callback) => {
+    const hostname = String(request.hostname || '').toLowerCase()
+    const verificationResult = String(request.verificationResult || '').toUpperCase()
+    const allowedHosts = new Set(upstreamTlsCompatibilityHostnames(getConfig()))
+    const isAllowedHost = allowedHosts.has(hostname)
+
+    if (verificationResult === 'OK') {
+      callback(0)
+      return
+    }
+
+    if (
+      isAllowedHost
+      && request.isIssuedByKnownRoot
+      && isRevocationAvailabilityError(verificationResult, request.errorCode)
+    ) {
+      callback(0)
+      return
+    }
+
+    callback(-2)
+  })
+}
+
 async function ensureProxyStarted(): Promise<void> {
   if (proxyHandle) return
   proxyError = null
@@ -607,6 +651,7 @@ app.whenReady().then(async () => {
     if (existsSync(iconPath)) app.dock.setIcon(iconPath)
   }
 
+  setupWindowsTlsCompatibility()
   setupApplicationMenu()
   await ensureProxyStarted()
   createWindow()

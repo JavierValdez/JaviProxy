@@ -2,6 +2,7 @@ import http from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { net } from 'electron'
 
 export interface ProxyConfig {
   provider: ProviderId
@@ -184,6 +185,23 @@ function upstreamModelsUrl(config: ProxyConfig): string {
   const normalized = config.upstreamBase.replace(/\/+$/g, '')
   if (/\/chat\/completions$/i.test(normalized)) return normalized.replace(/\/chat\/completions$/i, '/models')
   return `${normalized}/models`
+}
+
+export function upstreamTlsCompatibilityHostnames(config: ProxyConfig): string[] {
+  return dedupeSorted([
+    hostnameFromUrl(config.upstreamBase),
+    hostnameFromUrl(upstreamChatCompletionsUrl(config)),
+    hostnameFromUrl(upstreamModelsUrl(config)),
+    ...(config.provider === 'opencode' ? ['opencode.ai'] : [])
+  ].filter(Boolean))
+}
+
+function hostnameFromUrl(value: string): string {
+  try {
+    return new URL(value).hostname.toLowerCase()
+  } catch {
+    return ''
+  }
 }
 
 interface StartProxyOptions {
@@ -372,7 +390,7 @@ export async function startProxyServer(options: StartProxyOptions): Promise<Prox
 export async function fetchModels(config: ProxyConfig): Promise<{ ok: boolean; models: string[]; raw: any }> {
   // 1. Try the standard OpenAI /models endpoint.
   try {
-    const response = await fetch(upstreamModelsUrl(config), {
+    const response = await upstreamFetch(config, upstreamModelsUrl(config), {
       headers: upstreamHeaders(config, false)
     })
     const contentType = response.headers.get('content-type') || ''
@@ -388,7 +406,7 @@ export async function fetchModels(config: ProxyConfig): Promise<{ ok: boolean; m
   // 2. OpenCode Go publishes its current bundle on the marketing page.
   if (config.provider === 'opencode') {
     try {
-      const scraped = await scrapeGoModels()
+      const scraped = await scrapeGoModels(config)
       if (scraped.length) return { ok: true, models: scraped, raw: { source: 'scrape', models: scraped } }
     } catch { /* fall through to hardcoded */ }
   }
@@ -403,8 +421,8 @@ function dedupeSorted(values: string[]): string[] {
 }
 
 /** Scrape https://opencode.ai/go and extract model IDs from the "Includes ..." text. */
-async function scrapeGoModels(): Promise<string[]> {
-  const response = await fetch('https://opencode.ai/go', {
+async function scrapeGoModels(config: ProxyConfig): Promise<string[]> {
+  const response = await upstreamFetch(config, 'https://opencode.ai/go', {
     headers: { accept: 'text/html', 'user-agent': 'JaviProxy/1.0' }
   })
   if (!response.ok) return []
@@ -467,7 +485,7 @@ export async function testUpstream(config: ProxyConfig, logPath?: string): Promi
     body: request
   })
 
-  const response = await fetch(upstreamUrl, {
+  const response = await upstreamFetch(config, upstreamUrl, {
     method: 'POST',
     headers: upstreamHeaders(config, true),
     body: JSON.stringify(request)
@@ -506,7 +524,7 @@ async function createMessage(config: ProxyConfig, body: any, logContext?: ProxyL
     body: request,
     delivery: 'sync'
   })
-  let response = await fetch(upstreamChatCompletionsUrl(config), {
+  let response = await upstreamFetch(config, upstreamChatCompletionsUrl(config), {
     method: 'POST',
     headers: upstreamHeaders(config, true),
     body: JSON.stringify(request)
@@ -534,7 +552,7 @@ async function createMessage(config: ProxyConfig, body: any, logContext?: ProxyL
       delivery: 'sync_retry'
     })
 
-    response = await fetch(upstreamChatCompletionsUrl(config), {
+    response = await upstreamFetch(config, upstreamChatCompletionsUrl(config), {
       method: 'POST',
       headers: upstreamHeaders(config, true),
       body: JSON.stringify(retryRequest)
@@ -564,7 +582,7 @@ async function createStreamResponse(config: ProxyConfig, body: any, signal: Abor
     body: request,
     delivery: 'stream'
   })
-  const response = await fetch(upstreamChatCompletionsUrl(config), {
+  const response = await upstreamFetch(config, upstreamChatCompletionsUrl(config), {
     method: 'POST',
     headers: { ...upstreamHeaders(config, true), accept: 'text/event-stream' },
     body: JSON.stringify(request),
@@ -2171,6 +2189,41 @@ function upstreamHeaders(config: ProxyConfig, hasBody: boolean): Record<string, 
       'x-openrouter-title': 'JaviProxy'
     } : {})
   }
+}
+
+async function upstreamFetch(
+  config: ProxyConfig,
+  url: string,
+  init?: RequestInit & { bypassCustomProtocolHandlers?: boolean }
+): Promise<Response> {
+  try {
+    return await net.fetch(url, {
+      ...init,
+      bypassCustomProtocolHandlers: true
+    })
+  } catch (error: any) {
+    throw enhanceUpstreamFetchError(error, config, url)
+  }
+}
+
+function enhanceUpstreamFetchError(error: any, config: ProxyConfig, url: string): Error {
+  const message = error?.message || String(error)
+  const cause = error?.cause
+  const causeMessage = cause?.message || ''
+  const causeCode = cause?.code || ''
+  const host = hostnameFromUrl(url) || 'upstream'
+  const looksLikeRevocationFailure = /revocation|revocado|revocaci.n|CRYPT_E_NO_REVOCATION_CHECK/i.test(
+    `${message} ${causeMessage} ${causeCode}`
+  )
+
+  const next = new Error(
+    looksLikeRevocationFailure && process.platform === 'win32'
+      ? `No se pudo conectar a ${providerPreset(config.provider).label} (${host}) porque Windows no pudo comprobar la revocacion del certificado TLS. JaviProxy activo el modo de compatibilidad para hosts upstream; si el error continua, revisa que la red permita CRL/OCSP o configura el proxy WinHTTP. Detalle: ${message}`
+      : `No se pudo conectar a ${providerPreset(config.provider).label} (${host}). Detalle: ${message}`
+  )
+  ;(next as any).status = 502
+  ;(next as any).cause = error
+  return next
 }
 
 function writeEvent(res: http.ServerResponse, event: string, data: any): void {
